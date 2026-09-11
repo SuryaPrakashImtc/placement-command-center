@@ -2,6 +2,7 @@
   "name": "job-orchestrator",
   "version": "1.0.0",
   "private": true,
+  "type": "module",
   "main": "src/main.js",
   "scripts": {
     "start": "node src/main.js"
