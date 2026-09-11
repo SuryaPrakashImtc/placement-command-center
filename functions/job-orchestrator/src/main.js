@@ -1,4 +1,4 @@
-export async function main({ req, res, log, error }) {
+export default async ({ req, res, log, error }) {
   log("Job Automation Orchestrator started");
 
   return res.json({
@@ -6,4 +6,4 @@ export async function main({ req, res, log, error }) {
     message: "Job Automation Orchestrator is running",
     time: new Date().toISOString()
   });
-}
+};
