@@ -9,9 +9,25 @@ export default async ({ req, res, log, error }) => {
 
     const tablesDB = new TablesDB(client);
 
-    // -------------------------------------------------------
+    // =======================================================
+    // HELPERS
+    // =======================================================
+
+    async function jobExists(sourceJobId) {
+      const existing = await tablesDB.listRows({
+        databaseId: '6aa03d1800119759c9bb',
+        tableId: 'jobs',
+        queries: [
+          Query.equal('source_job_id', sourceJobId)
+        ]
+      });
+
+      return existing.rows.length > 0;
+    }
+
+    // =======================================================
     // 1. REMOTIVE
-    // -------------------------------------------------------
+    // =======================================================
 
     const remotiveCategories = [
       'marketing',
@@ -41,15 +57,7 @@ export default async ({ req, res, log, error }) => {
       for (const job of data.jobs) {
         const sourceJobId = String(job.id);
 
-        const existing = await tablesDB.listRows({
-          databaseId: '6aa03d1800119759c9bb',
-          tableId: 'jobs',
-          queries: [
-            Query.equal('source_job_id', sourceJobId)
-          ]
-        });
-
-        if (existing.rows.length > 0) {
+        if (await jobExists(sourceJobId)) {
           remotiveSkipped++;
           continue;
         }
@@ -97,9 +105,9 @@ export default async ({ req, res, log, error }) => {
       }
     }
 
-    // -------------------------------------------------------
+    // =======================================================
     // 2. HIMALAYAS
-    // -------------------------------------------------------
+    // =======================================================
 
     const himalayasQueries = [
       'marketing',
@@ -142,8 +150,6 @@ export default async ({ req, res, log, error }) => {
       for (const job of data.jobs || []) {
         const guid = String(job.guid);
 
-        // Prevent the same Himalayas job appearing twice
-        // because it matched more than one search term.
         if (seenHimalayasJobs.has(guid)) {
           continue;
         }
@@ -153,15 +159,7 @@ export default async ({ req, res, log, error }) => {
 
         const sourceJobId = `HIMALAYAS_${guid}`;
 
-        const existing = await tablesDB.listRows({
-          databaseId: '6aa03d1800119759c9bb',
-          tableId: 'jobs',
-          queries: [
-            Query.equal('source_job_id', sourceJobId)
-          ]
-        });
-
-        if (existing.rows.length > 0) {
+        if (await jobExists(sourceJobId)) {
           himalayasSkipped++;
           continue;
         }
@@ -175,7 +173,7 @@ export default async ({ req, res, log, error }) => {
           job.locationRestrictions.length > 0
         ) {
           location = job.locationRestrictions
-            .map(location => location.name || location.alpha2)
+            .map(location => location.name || location.alpha2 || location)
             .filter(Boolean)
             .join(', ');
         }
@@ -266,9 +264,148 @@ export default async ({ req, res, log, error }) => {
       }
     }
 
-    // -------------------------------------------------------
+    // =======================================================
+    // 3. HOPIN
+    // =======================================================
+
+    const hopinResponse = await fetch(
+      'https://api.hopinjobs.com/api/jobs'
+    );
+
+    if (!hopinResponse.ok) {
+      throw new Error(
+        `Hopin API returned ${hopinResponse.status}`
+      );
+    }
+
+    const hopinData = await hopinResponse.json();
+
+    const relevanceKeywords = [
+      'marketing',
+      'brand',
+      'branding',
+      'growth',
+      'digital marketing',
+      'product marketing',
+      'sales',
+      'business development',
+      'account management',
+      'key account',
+      'inside sales',
+      'pre sales',
+      'presales',
+      'revenue',
+      'sales operations',
+      'business analyst',
+      'business analytics',
+      'data analyst',
+      'analytics',
+      'business intelligence',
+      'commercial intelligence',
+      'marketing analytics',
+      'sales analyst',
+      'insights',
+      'market research',
+      'consumer research'
+    ];
+
+    const relevantHopinJobs = (hopinData.jobs || [])
+      .filter(job => job.is_active !== false)
+      .filter(job => {
+        const searchableText = [
+          job.title,
+          job.description,
+          job.industry,
+          job.role_type
+        ]
+          .filter(Boolean)
+          .join(' ')
+          .toLowerCase();
+
+        return relevanceKeywords.some(keyword =>
+          searchableText.includes(keyword)
+        );
+      })
+      .sort((a, b) => {
+        const aDate = a.posted_at
+          ? new Date(a.posted_at).getTime()
+          : 0;
+
+        const bDate = b.posted_at
+          ? new Date(b.posted_at).getTime()
+          : 0;
+
+        return bDate - aDate;
+      })
+      .slice(0, 150);
+
+    let hopinFound = (hopinData.jobs || []).length;
+    let hopinMatched = relevantHopinJobs.length;
+    let hopinSaved = 0;
+    let hopinSkipped = 0;
+
+    for (const job of relevantHopinJobs) {
+      const sourceJobId = `HOPIN_${job.id}`;
+
+      if (await jobExists(sourceJobId)) {
+        hopinSkipped++;
+        continue;
+      }
+
+      const now = new Date().toISOString();
+
+      await tablesDB.createRow({
+        databaseId: '6aa03d1800119759c9bb',
+        tableId: 'jobs',
+        rowId: ID.unique(),
+        data: {
+          source: 'Hopin',
+          job_title: job.title || 'Unknown',
+          company_name: job.company || 'Unknown',
+
+          // Hopin's public listing schema currently does not
+          // expose an application URL.
+          job_url: '',
+
+          location: job.location || 'India',
+          job_description: job.description || '',
+          job_type: job.job_type || 'job',
+          experience_required: 'Entry-level/Fresher',
+          education_required: 'Unknown',
+          salary_range:
+            job.ctc_amount ||
+            job.salary ||
+            'Not disclosed',
+          work_mode: job.work_type || 'Unknown',
+          industry: job.industry || 'Unknown',
+          department: job.role_type || 'Unknown',
+          function: job.role_type || 'Unknown',
+          company_size: 'Unknown',
+          company_type: 'Unknown',
+          job_posted_date: job.posted_at || null,
+          application_deadline: job.deadline || null,
+          job_status: job.is_active === false
+            ? 'CLOSED'
+            : 'OPEN',
+          eligibility_status: 'UNKNOWN',
+          match_status: 'UNKNOWN',
+          application_status: 'NOT_APPLIED',
+          discovery_date: now,
+          job_id: sourceJobId,
+          source_job_id: sourceJobId,
+          company_id: null,
+          source_platform: 'Hopin',
+          first_seen_date: now,
+          last_updated_date: now
+        }
+      });
+
+      hopinSaved++;
+    }
+
+    // =======================================================
     // RESULT
-    // -------------------------------------------------------
+    // =======================================================
 
     return res.json({
       status: 'SUCCESS',
@@ -286,6 +423,14 @@ export default async ({ req, res, log, error }) => {
         uniqueJobs: himalayasUnique,
         jobsSaved: himalayasSaved,
         jobsSkippedAsDuplicate: himalayasSkipped
+      },
+
+      hopin: {
+        jobsFound: hopinFound,
+        relevantJobsMatched: hopinMatched,
+        jobsProcessed: relevantHopinJobs.length,
+        jobsSaved: hopinSaved,
+        jobsSkippedAsDuplicate: hopinSkipped
       }
     });
 
