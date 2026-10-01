@@ -12,58 +12,9 @@ export default async ({ req, res, log, error }) => {
 
     const tablesDB = new TablesDB(client);
 
-    const eligibilityRules = {
-      allowedFunctions: [
-        'marketing',
-        'sales',
-        'business development',
-        'business analytics',
-        'data analyst',
-        'analytics',
-        'business intelligence',
-        'commercial intelligence',
-        'market research',
-        'consumer research',
-        'growth',
-        'brand',
-        'strategy',
-        'account management',
-        'sales operations',
-        'revenue'
-      ],
-
-      fresherKeywords: [
-        'fresher',
-        'freshers',
-        'entry level',
-        'entry-level',
-        'graduate',
-        'graduates',
-        '0-1 years',
-        '0 to 1 years',
-        '0 years',
-        'no experience',
-        'intern to full time',
-        'management trainee',
-        'graduate trainee',
-        'trainee'
-      ],
-
-      experienceRejectionPatterns: [
-        '5+ years',
-        '6+ years',
-        '7+ years',
-        '8+ years',
-        '9+ years',
-        '10+ years',
-        '5 years',
-        '6 years',
-        '7 years',
-        '8 years',
-        '9 years',
-        '10 years'
-      ]
-    };
+    // =======================================================
+    // HELPERS
+    // =======================================================
 
     function normalize(value) {
       return String(value || '')
@@ -73,53 +24,59 @@ export default async ({ req, res, log, error }) => {
         .trim();
     }
 
-    function parseSalaryLpa(salaryText) {
-      const text = normalize(salaryText);
+    function isRelevantJob(job) {
+      const text = normalize([
+        job.job_title,
+        job.department,
+        job.function,
+        job.industry
+      ].join(' '));
 
-      if (
-        !text ||
-        text.includes('not disclosed') ||
-        text.includes('unknown')
-      ) {
-        return null;
-      }
+      const keywords = [
+        'marketing',
+        'brand',
+        'branding',
+        'growth',
+        'sales',
+        'business development',
+        'account',
+        'commercial',
+        'revenue',
+        'strategy',
+        'analytics',
+        'analyst',
+        'business intelligence',
+        'business analytics',
+        'data analyst',
+        'insights',
+        'market research',
+        'consumer research'
+      ];
 
-      // ₹10 LPA / INR 10 lakh / 10 lakhs
-      const lakhMatch = text.match(
-        /(?:₹|rs\.?|inr)?\s*(\d+(?:\.\d+)?)\s*(?:-|to)?\s*(\d+(?:\.\d+)?)?\s*(?:lpa|lakh|lakhs)/
+      return keywords.some(keyword =>
+        text.includes(keyword)
       );
-
-      if (lakhMatch) {
-        const first = Number(lakhMatch[1]);
-        const second = lakhMatch[2]
-          ? Number(lakhMatch[2])
-          : first;
-
-        return Math.max(first, second);
-      }
-
-      // ₹1,000,000 / INR 1000000 etc.
-      const annualMatch = text.match(
-        /(?:₹|rs\.?|inr)?\s*(\d[\d,]*)/
-      );
-
-      if (annualMatch) {
-        const annualValue = Number(
-          annualMatch[1].replace(/,/g, '')
-        );
-
-        if (annualValue >= 500000) {
-          return annualValue / 100000;
-        }
-      }
-
-      return null;
     }
 
-    function isIndiaRelevant(job) {
+    function isIndiaEligible(job) {
       const location = normalize(job.location);
+      const source = normalize(job.source);
 
-      if (!location) {
+      // Himalayas results were explicitly requested for India.
+      if (source === 'himalayas') {
+        return true;
+      }
+
+      // Jobicy results were filtered to India.
+      if (
+        source === 'jobicy' &&
+        location.includes('india')
+      ) {
+        return true;
+      }
+
+      // "Anywhere" is not automatically India.
+      if (location === 'anywhere') {
         return false;
       }
 
@@ -140,8 +97,7 @@ export default async ({ req, res, log, error }) => {
         'kolkata',
         'ahmedabad',
         'jaipur',
-        'nagpur',
-        'remote'
+        'nagpur'
       ];
 
       return indiaTerms.some(term =>
@@ -149,67 +105,110 @@ export default async ({ req, res, log, error }) => {
       );
     }
 
-    function isRelevantFunction(job) {
-      const text = normalize([
-        job.job_title,
-        job.department,
-        job.function,
-        job.industry,
-        job.job_description
-      ].join(' '));
+    function hasAmbiguousLocation(job) {
+      const location = normalize(job.location);
 
-      return eligibilityRules.allowedFunctions.some(
-        keyword => text.includes(keyword)
-      );
+      if (!location) {
+        return true;
+      }
+
+      if (
+        location === 'remote' ||
+        location === 'worldwide' ||
+        location === 'global'
+      ) {
+        return true;
+      }
+
+      return false;
     }
 
-    function isClearlyFresherFriendly(job) {
-      const text = normalize([
-        job.job_title,
-        job.experience_required,
-        job.job_description
-      ].join(' '));
+    function parseSalaryLpa(value) {
+      const text = normalize(value);
 
-      return eligibilityRules.fresherKeywords.some(
-        keyword => text.includes(keyword)
+      if (!text || text.includes('not disclosed')) {
+        return null;
+      }
+
+      // Examples:
+      // 10 LPA
+      // ₹10 lakh
+      // INR 10 lakhs
+      const lakhMatch = text.match(
+        /(?:₹|rs\.?|inr)?\s*(\d+(?:\.\d+)?)\s*(?:-|to)?\s*(\d+(?:\.\d+)?)?\s*(?:lpa|lakh|lakhs)/
       );
+
+      if (lakhMatch) {
+        const first = Number(lakhMatch[1]);
+        const second = lakhMatch[2]
+          ? Number(lakhMatch[2])
+          : first;
+
+        return Math.max(first, second);
+      }
+
+      // Annual amount such as INR 900000
+      const annualMatch = text.match(
+        /(?:₹|rs\.?|inr)?\s*(\d[\d,]*)/
+      );
+
+      if (annualMatch) {
+        const amount = Number(
+          annualMatch[1].replace(/,/g, '')
+        );
+
+        if (amount >= 500000) {
+          return amount / 100000;
+        }
+      }
+
+      return null;
     }
 
-    function isClearlyTooExperienced(job) {
+    function clearlyTooExperienced(job) {
       const text = normalize([
-        job.experience_required,
-        job.job_description
+        job.job_title,
+        job.experience_required
       ].join(' '));
 
-      return eligibilityRules.experienceRejectionPatterns.some(
-        pattern => text.includes(pattern)
+      // Clearly senior requirements.
+      const seniorPatterns = [
+        /\b3\+?\s*years?\b/,
+        /\b4\+?\s*years?\b/,
+        /\b5\+?\s*years?\b/,
+        /\b6\+?\s*years?\b/,
+        /\b7\+?\s*years?\b/,
+        /\b8\+?\s*years?\b/,
+        /\b9\+?\s*years?\b/,
+        /\b10\+?\s*years?\b/,
+        /\b3\s*-\s*\d+\s*years?\b/,
+        /\b4\s*-\s*\d+\s*years?\b/,
+        /\b5\s*-\s*\d+\s*years?\b/
+      ];
+
+      return seniorPatterns.some(pattern =>
+        pattern.test(text)
       );
     }
 
     function evaluateJob(job) {
-      const indiaRelevant = isIndiaRelevant(job);
-      const relevantFunction = isRelevantFunction(job);
-      const fresherFriendly = isClearlyFresherFriendly(job);
-      const tooExperienced = isClearlyTooExperienced(job);
+      // ---------------------------------------------------
+      // HARD REJECTIONS
+      // ---------------------------------------------------
+
+      if (!isRelevantJob(job)) {
+        return 'NOT_ELIGIBLE';
+      }
+
+      if (!isIndiaEligible(job)) {
+        return hasAmbiguousLocation(job)
+          ? 'UNKNOWN'
+          : 'NOT_ELIGIBLE';
+      }
 
       const salaryLpa = parseSalaryLpa(
         job.salary_range
       );
-
-      // Hard rejection: wrong geography.
-      if (!indiaRelevant) {
-        return 'NOT_ELIGIBLE';
-      }
-
-      // Hard rejection: clearly unrelated function.
-      if (!relevantFunction) {
-        return 'NOT_ELIGIBLE';
-      }
-
-      // Hard rejection: clearly senior role.
-      if (tooExperienced && !fresherFriendly) {
-        return 'NOT_ELIGIBLE';
-      }
 
       // Known salary below target.
       if (
@@ -219,34 +218,63 @@ export default async ({ req, res, log, error }) => {
         return 'NOT_ELIGIBLE';
       }
 
-      // Known salary meeting target + relevant role.
-      if (
-        salaryLpa !== null &&
-        salaryLpa >= 10
-      ) {
-        return 'ELIGIBLE';
+      // Clearly senior role.
+      if (clearlyTooExperienced(job)) {
+        return 'NOT_ELIGIBLE';
       }
 
-      // Explicitly fresher-friendly but salary unknown.
-      if (fresherFriendly) {
-        return 'ELIGIBLE';
-      }
+      // ---------------------------------------------------
+      // PASS INITIAL SCREEN
+      // ---------------------------------------------------
+      //
+      // Unknown salary or experience is NOT a rejection.
+      // Candidate-job matching will evaluate those later.
 
-      // Relevant + India, but critical information is missing.
-      return 'UNKNOWN';
+      return 'ELIGIBLE';
     }
 
-    // Fetch jobs whose eligibility has not been evaluated.
-    const jobsResponse = await tablesDB.listRows({
-      databaseId: DATABASE_ID,
-      tableId: TABLE_ID,
-      queries: [
-        Query.equal('eligibility_status', 'UNKNOWN'),
-        Query.limit(100)
-      ]
-    });
+    // =======================================================
+    // FETCH ALL JOBS WITH CURSOR PAGINATION
+    // =======================================================
 
-    const jobs = jobsResponse.rows || [];
+    let allJobs = [];
+    let cursor = null;
+
+    while (true) {
+
+      const queries = [
+        Query.limit(100)
+      ];
+
+      if (cursor) {
+        queries.push(
+          Query.cursorAfter(cursor)
+        );
+      }
+
+      const page = await tablesDB.listRows({
+        databaseId: DATABASE_ID,
+        tableId: TABLE_ID,
+        queries
+      });
+
+      const rows = page.rows || [];
+
+      allJobs.push(...rows);
+
+      if (
+        rows.length < 100 ||
+        !rows[rows.length - 1]
+      ) {
+        break;
+      }
+
+      cursor = rows[rows.length - 1].$id;
+    }
+
+    // =======================================================
+    // EVALUATE
+    // =======================================================
 
     let evaluated = 0;
     let eligible = 0;
@@ -254,8 +282,9 @@ export default async ({ req, res, log, error }) => {
     let unknown = 0;
     let failed = 0;
 
-    for (const job of jobs) {
+    for (const job of allJobs) {
       try {
+
         const result = evaluateJob(job);
 
         await tablesDB.updateRow({
@@ -279,6 +308,7 @@ export default async ({ req, res, log, error }) => {
 
       } catch (jobError) {
         failed++;
+
         error(
           `Eligibility failed for ${job.$id}: ${jobError.message}`
         );
@@ -287,7 +317,7 @@ export default async ({ req, res, log, error }) => {
 
     return res.json({
       status: 'SUCCESS',
-      jobsFoundForEvaluation: jobs.length,
+      jobsFoundForEvaluation: allJobs.length,
       evaluated,
       eligible,
       notEligible,
@@ -296,6 +326,7 @@ export default async ({ req, res, log, error }) => {
     });
 
   } catch (err) {
+
     error(err.message);
 
     return res.json({
