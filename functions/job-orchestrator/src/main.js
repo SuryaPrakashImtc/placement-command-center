@@ -442,6 +442,7 @@ export default async ({ req, res, log, error }) => {
 
       error(`Hopin: ${hopinError.message}`);
     }
+    // =======================================================
     // RESULT
     // =======================================================
 
@@ -464,11 +465,12 @@ export default async ({ req, res, log, error }) => {
       },
 
       hopin: {
+        status: hopinStatus,
         jobsFound: hopinFound,
         relevantJobsMatched: hopinMatched,
-        jobsProcessed: relevantHopinJobs.length,
         jobsSaved: hopinSaved,
-        jobsSkippedAsDuplicate: hopinSkipped
+        jobsSkippedAsDuplicate: hopinSkipped,
+        requestsMade: hopinRequests
       }
     });
 
