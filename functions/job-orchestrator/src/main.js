@@ -18,7 +18,7 @@ export default async ({ req, res, log, error }) => {
 
     return res.json({
       status: 'SUCCESS',
-      message: 'Appwrite database connected',
+      message: 'Database connection working',
       jobsFound: result.rows.length
     });
 
