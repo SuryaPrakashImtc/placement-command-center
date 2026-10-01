@@ -1,4 +1,4 @@
-export default async ({ req, res, log, error }) {
+export default async ({ req, res, log, error }) => {
   log("Job Automation Orchestrator started");
 
   return res.json({
