@@ -268,142 +268,180 @@ export default async ({ req, res, log, error }) => {
     // 3. HOPIN
     // =======================================================
 
-    const hopinResponse = await fetch(
-      'https://api.hopinjobs.com/api/jobs'
-    );
-
-    if (!hopinResponse.ok) {
-      throw new Error(
-        `Hopin API returned ${hopinResponse.status}`
-      );
-    }
-
-    const hopinData = await hopinResponse.json();
-
-    const relevanceKeywords = [
-      'marketing',
-      'brand',
-      'branding',
-      'growth',
-      'digital marketing',
-      'product marketing',
-      'sales',
-      'business development',
-      'account management',
-      'key account',
-      'inside sales',
-      'pre sales',
-      'presales',
-      'revenue',
-      'sales operations',
-      'business analyst',
-      'business analytics',
-      'data analyst',
-      'analytics',
-      'business intelligence',
-      'commercial intelligence',
-      'marketing analytics',
-      'sales analyst',
-      'insights',
-      'market research',
-      'consumer research'
-    ];
-
-    const relevantHopinJobs = (hopinData.jobs || [])
-      .filter(job => job.is_active !== false)
-      .filter(job => {
-        const searchableText = [
-          job.title,
-          job.description,
-          job.industry,
-          job.role_type
-        ]
-          .filter(Boolean)
-          .join(' ')
-          .toLowerCase();
-
-        return relevanceKeywords.some(keyword =>
-          searchableText.includes(keyword)
-        );
-      })
-      .sort((a, b) => {
-        const aDate = a.posted_at
-          ? new Date(a.posted_at).getTime()
-          : 0;
-
-        const bDate = b.posted_at
-          ? new Date(b.posted_at).getTime()
-          : 0;
-
-        return bDate - aDate;
-      })
-      .slice(0, 150);
-
-    let hopinFound = (hopinData.jobs || []).length;
-    let hopinMatched = relevantHopinJobs.length;
+    let hopinFound = 0;
+    let hopinMatched = 0;
     let hopinSaved = 0;
     let hopinSkipped = 0;
+    let hopinRequests = 0;
+    let hopinStatus = 'SUCCESS';
 
-    for (const job of relevantHopinJobs) {
-      const sourceJobId = `HOPIN_${job.id}`;
+    try {
+      // First get the official filter vocabulary.
+      const filtersResponse = await fetch(
+        'https://api.hopinjobs.com/api/filters'
+      );
 
-      if (await jobExists(sourceJobId)) {
-        hopinSkipped++;
-        continue;
+      if (!filtersResponse.ok) {
+        throw new Error(
+          `Hopin filters API returned ${filtersResponse.status}`
+        );
       }
 
-      const now = new Date().toISOString();
+      const filtersData = await filtersResponse.json();
 
-      await tablesDB.createRow({
-        databaseId: '6aa03d1800119759c9bb',
-        tableId: 'jobs',
-        rowId: ID.unique(),
-        data: {
-          source: 'Hopin',
-          job_title: job.title || 'Unknown',
-          company_name: job.company || 'Unknown',
+      const roleOptions =
+        Array.isArray(filtersData.filters?.role)
+          ? filtersData.filters.role
+          : [];
 
-          // Hopin's public listing schema currently does not
-          // expose an application URL.
-          job_url: '',
+      // We only want role families relevant to:
+      // Sales + Marketing + Analytics + adjacent business roles.
+      const roleKeywords = [
+        'marketing',
+        'brand',
+        'growth',
+        'sales',
+        'business development',
+        'business',
+        'account',
+        'commercial',
+        'analytics',
+        'analyst',
+        'insights',
+        'strategy',
+        'market research',
+        'product marketing'
+      ];
 
-          location: job.location || 'India',
-          job_description: job.description || '',
-          job_type: job.job_type || 'job',
-          experience_required: 'Entry-level/Fresher',
-          education_required: 'Unknown',
-          salary_range:
-            job.ctc_amount ||
-            job.salary ||
-            'Not disclosed',
-          work_mode: job.work_type || 'Unknown',
-          industry: job.industry || 'Unknown',
-          department: job.role_type || 'Unknown',
-          function: job.role_type || 'Unknown',
-          company_size: 'Unknown',
-          company_type: 'Unknown',
-          job_posted_date: job.posted_at || null,
-          application_deadline: job.deadline || null,
-          job_status: job.is_active === false
-            ? 'CLOSED'
-            : 'OPEN',
-          eligibility_status: 'UNKNOWN',
-          match_status: 'UNKNOWN',
-          application_status: 'NOT_APPLIED',
-          discovery_date: now,
-          job_id: sourceJobId,
-          source_job_id: sourceJobId,
-          company_id: null,
-          source_platform: 'Hopin',
-          first_seen_date: now,
-          last_updated_date: now
+      const selectedRoles = roleOptions
+        .filter(role => role.is_active !== false)
+        .filter(role => {
+          const label = String(
+            role.display_label || role.filter_value || ''
+          ).toLowerCase();
+
+          return roleKeywords.some(keyword =>
+            label.includes(keyword)
+          );
+        })
+        .map(role => role.filter_value)
+        .filter(Boolean);
+
+      // Remove duplicate filter values.
+      const uniqueRoles = [...new Set(selectedRoles)];
+
+      for (const roleType of uniqueRoles) {
+
+        // Fetch normal/off-campus listings.
+        for (const unofficial of ['false', 'true']) {
+
+          const url = new URL(
+            'https://api.hopinjobs.com/api/jobs'
+          );
+
+          url.searchParams.set('role_type', roleType);
+          url.searchParams.set(
+            'is_unofficial',
+            unofficial
+          );
+
+          const response = await fetch(url);
+
+          hopinRequests++;
+
+          if (!response.ok) {
+            throw new Error(
+              `Hopin jobs API returned ${response.status} for role ${roleType}`
+            );
+          }
+
+          const data = await response.json();
+
+          const jobs = Array.isArray(data.jobs)
+            ? data.jobs
+            : [];
+
+          hopinFound += jobs.length;
+
+          for (const job of jobs) {
+
+            if (job.is_active === false) {
+              continue;
+            }
+
+            hopinMatched++;
+
+            const sourceJobId = `HOPIN_${job.id}`;
+
+            if (await jobExists(sourceJobId)) {
+              hopinSkipped++;
+              continue;
+            }
+
+            const now = new Date().toISOString();
+
+            await tablesDB.createRow({
+              databaseId: '6aa03d1800119759c9bb',
+              tableId: 'jobs',
+              rowId: ID.unique(),
+              data: {
+                source: 'Hopin',
+                job_title: job.title || 'Unknown',
+                company_name: job.company || 'Unknown',
+
+                // Hopin does not currently expose the employer
+                // application URL in the public job schema.
+                job_url: '',
+
+                location: job.location || 'India',
+                job_description: job.description || '',
+                job_type: job.job_type || 'job',
+
+                // Hopin's public jobs endpoint is specifically
+                // fresher / entry-level focused.
+                experience_required: 'Entry-level/Fresher',
+
+                education_required: 'Unknown',
+
+                salary_range:
+                  job.ctc_amount ||
+                  job.salary ||
+                  'Not disclosed',
+
+                work_mode: job.work_type || 'Unknown',
+                industry: job.industry || 'Unknown',
+                department: job.role_type || 'Unknown',
+                function: job.role_type || 'Unknown',
+                company_size: 'Unknown',
+                company_type: 'Unknown',
+                job_posted_date: job.posted_at || null,
+                application_deadline: job.deadline || null,
+                job_status: 'OPEN',
+                eligibility_status: 'UNKNOWN',
+                match_status: 'UNKNOWN',
+                application_status: 'NOT_APPLIED',
+                discovery_date: now,
+                job_id: sourceJobId,
+                source_job_id: sourceJobId,
+                company_id: null,
+                source_platform: 'Hopin',
+                first_seen_date: now,
+                last_updated_date: now
+              }
+            });
+
+            hopinSaved++;
+          }
         }
-      });
+      }
 
-      hopinSaved++;
+    } catch (hopinError) {
+
+      // Do NOT let one failed source break the other sources.
+      hopinStatus = 'PARTIAL_SUCCESS';
+
+      error(`Hopin: ${hopinError.message}`);
     }
-
-    // =======================================================
     // RESULT
     // =======================================================
 
