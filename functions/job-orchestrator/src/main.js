@@ -1,4 +1,4 @@
-import { Client, TablesDB, ID } from 'node-appwrite';
+import { Client, TablesDB, ID, Query } from 'node-appwrite';
 
 export default async ({ req, res, log, error }) => {
   try {
@@ -9,7 +9,6 @@ export default async ({ req, res, log, error }) => {
 
     const tablesDB = new TablesDB(client);
 
-    // Fetch public remote marketing/sales jobs
     const response = await fetch(
       'https://remotive.com/api/remote-jobs?category=marketing&limit=10'
     );
@@ -21,8 +20,24 @@ export default async ({ req, res, log, error }) => {
     const data = await response.json();
 
     let saved = 0;
+    let skipped = 0;
 
     for (const job of data.jobs) {
+      const sourceJobId = String(job.id);
+
+      const existing = await tablesDB.listRows({
+        databaseId: '6aa03d1800119759c9bb',
+        tableId: 'jobs',
+        queries: [
+          Query.equal('source_job_id', sourceJobId)
+        ]
+      });
+
+      if (existing.rows.length > 0) {
+        skipped++;
+        continue;
+      }
+
       await tablesDB.createRow({
         databaseId: '6aa03d1800119759c9bb',
         tableId: 'jobs',
@@ -51,8 +66,8 @@ export default async ({ req, res, log, error }) => {
           match_status: 'UNKNOWN',
           application_status: 'NOT_APPLIED',
           discovery_date: new Date().toISOString(),
-          job_id: `REMOTIVE_${job.id}`,
-          source_job_id: String(job.id),
+          job_id: `REMOTIVE_${sourceJobId}`,
+          source_job_id: sourceJobId,
           company_id: null,
           source_platform: 'Remotive',
           first_seen_date: new Date().toISOString(),
@@ -67,7 +82,8 @@ export default async ({ req, res, log, error }) => {
       status: 'SUCCESS',
       source: 'Remotive',
       jobsFound: data.jobs.length,
-      jobsSaved: saved
+      jobsSaved: saved,
+      jobsSkippedAsDuplicate: skipped
     });
 
   } catch (err) {
