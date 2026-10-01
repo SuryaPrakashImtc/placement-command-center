@@ -266,184 +266,229 @@ export default async ({ req, res, log, error }) => {
 
     // =======================================================
        // =======================================================
-    // 3. HOPIN
+        // =======================================================
+    // 3. JOBICY
     // =======================================================
 
-    let hopinFound = 0;
-    let hopinMatched = 0;
-    let hopinSaved = 0;
-    let hopinSkipped = 0;
-    let hopinRequests = 0;
-    let hopinStatus = 'SUCCESS';
+    let jobicyFound = 0;
+    let jobicyMatched = 0;
+    let jobicySaved = 0;
+    let jobicySkipped = 0;
+    let jobicyRequests = 0;
+    let jobicyStatus = 'SUCCESS';
 
     try {
-      const workTypes = [
-        'On-site',
-        'Hybrid',
-        'Remote'
-      ];
-
-      const unofficialModes = [
-        'false',
-        'true'
-      ];
-
-      const relevanceKeywords = [
+      const jobicyIndustries = [
         'marketing',
-        'brand',
-        'branding',
-        'growth',
-        'digital marketing',
-        'product marketing',
-        'sales',
-        'business development',
-        'account management',
-        'key account',
-        'inside sales',
-        'pre sales',
-        'presales',
-        'revenue',
-        'sales operations',
-        'business analyst',
-        'business analytics',
-        'data analyst',
-        'analytics',
-        'business intelligence',
-        'commercial intelligence',
-        'marketing analytics',
-        'sales analyst',
-        'insights',
-        'market research',
-        'consumer research',
-        'strategy'
+        'business',
+        'seller',
+        'data-science'
       ];
 
-      const seenHopinJobs = new Set();
+      const seenJobicyJobs = new Set();
 
-      for (const workType of workTypes) {
-        for (const unofficial of unofficialModes) {
+      for (const industry of jobicyIndustries) {
 
-          const url = new URL(
-            'https://api.hopinjobs.com/api/jobs'
+        const url = new URL(
+          'https://jobicy.com/api/v2/remote-jobs'
+        );
+
+        url.searchParams.set('count', '50');
+        url.searchParams.set('geo', 'apac');
+        url.searchParams.set('industry', industry);
+
+        const response = await fetch(url);
+
+        jobicyRequests++;
+
+        if (!response.ok) {
+          throw new Error(
+            `Jobicy API returned ${response.status} for ${industry}`
           );
+        }
 
-          url.searchParams.set(
-            'work_type',
-            workType
-          );
+        const data = await response.json();
 
-          url.searchParams.set(
-            'is_unofficial',
-            unofficial
-          );
+        const jobs = Array.isArray(data.jobs)
+          ? data.jobs
+          : [];
 
-          const response = await fetch(url);
+        jobicyFound += jobs.length;
 
-          hopinRequests++;
+        for (const job of jobs) {
 
-          if (!response.ok) {
-            throw new Error(
-              `Hopin API returned ${response.status}`
-            );
+          const geo = String(
+            job.jobGeo || ''
+          ).toLowerCase();
+
+          // India-specific or unrestricted remote roles.
+          const indiaEligible =
+            geo.includes('india') ||
+            geo === 'anywhere';
+
+          if (!indiaEligible) {
+            continue;
           }
 
-          const data = await response.json();
+          const searchableText = [
+            job.jobTitle,
+            job.jobDescription,
+            job.jobExcerpt,
+            ...(Array.isArray(job.jobIndustry)
+              ? job.jobIndustry
+              : [])
+          ]
+            .filter(Boolean)
+            .join(' ')
+            .toLowerCase();
 
-          const jobs = Array.isArray(data.jobs)
-            ? data.jobs
-            : [];
+          const relevantKeywords = [
+            'marketing',
+            'brand',
+            'branding',
+            'growth',
+            'digital marketing',
+            'product marketing',
+            'sales',
+            'business development',
+            'account management',
+            'account executive',
+            'inside sales',
+            'revenue',
+            'sales operations',
+            'business analyst',
+            'business analytics',
+            'data analyst',
+            'analytics',
+            'business intelligence',
+            'marketing analytics',
+            'market research',
+            'consumer research',
+            'strategy'
+          ];
 
-          hopinFound += jobs.length;
-
-          for (const job of jobs) {
-
-            if (job.is_active === false) {
-              continue;
-            }
-
-            const searchableText = [
-              job.title,
-              job.description,
-              job.industry,
-              job.role_type
-            ]
-              .filter(Boolean)
-              .join(' ')
-              .toLowerCase();
-
-            const relevant = relevanceKeywords.some(
-              keyword => searchableText.includes(keyword)
+          const relevant =
+            relevantKeywords.some(keyword =>
+              searchableText.includes(keyword)
             );
 
-            if (!relevant) {
-              continue;
-            }
-
-            const sourceJobId = `HOPIN_${job.id}`;
-
-            if (seenHopinJobs.has(sourceJobId)) {
-              continue;
-            }
-
-            seenHopinJobs.add(sourceJobId);
-            hopinMatched++;
-
-            if (await jobExists(sourceJobId)) {
-              hopinSkipped++;
-              continue;
-            }
-
-            const now = new Date().toISOString();
-
-            await tablesDB.createRow({
-              databaseId: '6aa03d1800119759c9bb',
-              tableId: 'jobs',
-              rowId: ID.unique(),
-              data: {
-                source: 'Hopin',
-                job_title: job.title || 'Unknown',
-                company_name: job.company || 'Unknown',
-                job_url: '',
-                location: job.location || 'India',
-                job_description: job.description || '',
-                job_type: job.job_type || 'job',
-                experience_required: 'Entry-level/Fresher',
-                education_required: 'Unknown',
-                salary_range:
-                  job.ctc_amount ||
-                  job.salary ||
-                  'Not disclosed',
-                work_mode: job.work_type || 'Unknown',
-                industry: job.industry || 'Unknown',
-                department: job.role_type || 'Unknown',
-                function: job.role_type || 'Unknown',
-                company_size: 'Unknown',
-                company_type: 'Unknown',
-                job_posted_date: job.posted_at || null,
-                application_deadline: job.deadline || null,
-                job_status: 'OPEN',
-                eligibility_status: 'UNKNOWN',
-                match_status: 'UNKNOWN',
-                application_status: 'NOT_APPLIED',
-                discovery_date: now,
-                job_id: sourceJobId,
-                source_job_id: sourceJobId,
-                company_id: null,
-                source_platform: 'Hopin',
-                first_seen_date: now,
-                last_updated_date: now
-              }
-            });
-
-            hopinSaved++;
+          if (!relevant) {
+            continue;
           }
+
+          const sourceJobId =
+            `JOBICY_${String(job.id)}`;
+
+          if (seenJobicyJobs.has(sourceJobId)) {
+            continue;
+          }
+
+          seenJobicyJobs.add(sourceJobId);
+          jobicyMatched++;
+
+          if (await jobExists(sourceJobId)) {
+            jobicySkipped++;
+            continue;
+          }
+
+          const now = new Date().toISOString();
+
+          const salary =
+            job.salaryMin !== null &&
+            job.salaryMin !== undefined
+              ? `${job.salaryCurrency || ''} ${
+                  Number(job.salaryMin).toLocaleString()
+                }` +
+                (
+                  job.salaryMax !== null &&
+                  job.salaryMax !== undefined
+                    ? ` - ${Number(
+                        job.salaryMax
+                      ).toLocaleString()}`
+                    : ''
+                ) +
+                ` ${job.salaryPeriod || ''}`
+              : 'Not disclosed';
+
+          await tablesDB.createRow({
+            databaseId: '6aa03d1800119759c9bb',
+            tableId: 'jobs',
+            rowId: ID.unique(),
+            data: {
+              source: 'Jobicy',
+              job_title: job.jobTitle || 'Unknown',
+              company_name: job.companyName || 'Unknown',
+
+              // Public API returns Jobicy listing URL.
+              job_url: job.url || '',
+
+              location: job.jobGeo || 'Anywhere',
+
+              job_description:
+                job.jobDescription ||
+                job.jobExcerpt ||
+                '',
+
+              job_type:
+                Array.isArray(job.jobType) &&
+                job.jobType.length > 0
+                  ? job.jobType.join(', ')
+                  : 'Unknown',
+
+              experience_required:
+                job.jobLevel || 'Unknown',
+
+              education_required: 'Unknown',
+
+              salary_range: salary,
+
+              work_mode: 'Remote',
+
+              industry:
+                Array.isArray(job.jobIndustry) &&
+                job.jobIndustry.length > 0
+                  ? job.jobIndustry.join(', ')
+                  : industry,
+
+              department: industry,
+              function: industry,
+              company_size: 'Unknown',
+              company_type: 'Unknown',
+
+              job_posted_date:
+                job.pubDate || null,
+
+              application_deadline: null,
+
+              job_status: 'OPEN',
+              eligibility_status: 'UNKNOWN',
+              match_status: 'UNKNOWN',
+              application_status: 'NOT_APPLIED',
+
+              discovery_date: now,
+
+              job_id: sourceJobId,
+              source_job_id: sourceJobId,
+              company_id: null,
+
+              source_platform: 'Jobicy',
+
+              first_seen_date: now,
+              last_updated_date: now
+            }
+          });
+
+          jobicySaved++;
         }
       }
 
-    } catch (hopinError) {
-      hopinStatus = 'PARTIAL_SUCCESS';
-      error(`Hopin: ${hopinError.message}`);
+    } catch (jobicyError) {
+      jobicyStatus = 'PARTIAL_SUCCESS';
+      error(`Jobicy: ${jobicyError.message}`);
     }
+
+    // =======================================================
+    // RESULT
     // =======================================================
 
     return res.json({
@@ -464,13 +509,13 @@ export default async ({ req, res, log, error }) => {
         jobsSkippedAsDuplicate: himalayasSkipped
       },
 
-      hopin: {
-        status: hopinStatus,
-        jobsFound: hopinFound,
-        relevantJobsMatched: hopinMatched,
-        jobsSaved: hopinSaved,
-        jobsSkippedAsDuplicate: hopinSkipped,
-        requestsMade: hopinRequests
+      jobicy: {
+        status: jobicyStatus,
+        jobsFound: jobicyFound,
+        relevantJobsMatched: jobicyMatched,
+        jobsSaved: jobicySaved,
+        jobsSkippedAsDuplicate: jobicySkipped,
+        requestsMade: jobicyRequests
       }
     });
 
