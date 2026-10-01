@@ -1,9 +1,33 @@
-export default async ({ req, res, log, error }) => {
-  log("Job Automation Orchestrator started");
+import { Client, TablesDB } from 'node-appwrite';
 
-  return res.json({
-    status: "SUCCESS",
-    message: "Job Automation Orchestrator is running",
-    time: new Date().toISOString()
-  });
+export default async ({ req, res, log, error }) => {
+  try {
+    log("Job Automation Orchestrator started");
+
+    const client = new Client()
+      .setEndpoint(process.env.APPWRITE_FUNCTION_API_ENDPOINT)
+      .setProject(process.env.APPWRITE_FUNCTION_PROJECT_ID)
+      .setKey(req.headers['x-appwrite-key']);
+
+    const tablesDB = new TablesDB(client);
+
+    const result = await tablesDB.listRows({
+      databaseId: '6aa03d1800119759c9bb',
+      tableId: 'jobs'
+    });
+
+    return res.json({
+      status: 'SUCCESS',
+      message: 'Appwrite database connected',
+      jobsFound: result.rows.length
+    });
+
+  } catch (err) {
+    error(err.message);
+
+    return res.json({
+      status: 'FAILED',
+      error: err.message
+    }, 500);
+  }
 };
