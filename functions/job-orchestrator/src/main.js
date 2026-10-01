@@ -265,6 +265,7 @@ export default async ({ req, res, log, error }) => {
     }
 
     // =======================================================
+       // =======================================================
     // 3. HOPIN
     // =======================================================
 
@@ -276,70 +277,61 @@ export default async ({ req, res, log, error }) => {
     let hopinStatus = 'SUCCESS';
 
     try {
-      // First get the official filter vocabulary.
-      const filtersResponse = await fetch(
-        'https://api.hopinjobs.com/api/filters'
-      );
-
-      if (!filtersResponse.ok) {
-        throw new Error(
-          `Hopin filters API returned ${filtersResponse.status}`
-        );
-      }
-
-      const filtersData = await filtersResponse.json();
-
-      const roleOptions =
-        Array.isArray(filtersData.filters?.role)
-          ? filtersData.filters.role
-          : [];
-
-      // We only want role families relevant to:
-      // Sales + Marketing + Analytics + adjacent business roles.
-      const roleKeywords = [
-        'marketing',
-        'brand',
-        'growth',
-        'sales',
-        'business development',
-        'business',
-        'account',
-        'commercial',
-        'analytics',
-        'analyst',
-        'insights',
-        'strategy',
-        'market research',
-        'product marketing'
+      const workTypes = [
+        'On-site',
+        'Hybrid',
+        'Remote'
       ];
 
-      const selectedRoles = roleOptions
-        .filter(role => role.is_active !== false)
-        .filter(role => {
-          const label = String(
-            role.display_label || role.filter_value || ''
-          ).toLowerCase();
+      const unofficialModes = [
+        'false',
+        'true'
+      ];
 
-          return roleKeywords.some(keyword =>
-            label.includes(keyword)
-          );
-        })
-        .map(role => role.filter_value)
-        .filter(Boolean);
+      const relevanceKeywords = [
+        'marketing',
+        'brand',
+        'branding',
+        'growth',
+        'digital marketing',
+        'product marketing',
+        'sales',
+        'business development',
+        'account management',
+        'key account',
+        'inside sales',
+        'pre sales',
+        'presales',
+        'revenue',
+        'sales operations',
+        'business analyst',
+        'business analytics',
+        'data analyst',
+        'analytics',
+        'business intelligence',
+        'commercial intelligence',
+        'marketing analytics',
+        'sales analyst',
+        'insights',
+        'market research',
+        'consumer research',
+        'strategy'
+      ];
 
-      // Remove duplicate filter values.
-      const uniqueRoles = [...new Set(selectedRoles)];
+      const seenHopinJobs = new Set();
 
-      for (const roleType of uniqueRoles) {
-
-        // Fetch normal/off-campus listings.
-        for (const unofficial of ['false', 'true']) {
+      for (const workType of workTypes) {
+        for (const unofficial of unofficialModes) {
 
           const url = new URL(
             'https://api.hopinjobs.com/api/jobs'
           );
 
-          url.searchParams.set('role_type', roleType);
+          url.searchParams.set(
+            'work_type',
+            workType
+          );
+
           url.searchParams.set(
             'is_unofficial',
             unofficial
@@ -351,7 +343,7 @@ export default async ({ req, res, log, error }) => {
 
           if (!response.ok) {
             throw new Error(
-              `Hopin jobs API returned ${response.status} for role ${roleType}`
+              `Hopin API returned ${response.status}`
             );
           }
 
@@ -369,9 +361,32 @@ export default async ({ req, res, log, error }) => {
               continue;
             }
 
-            hopinMatched++;
+            const searchableText = [
+              job.title,
+              job.description,
+              job.industry,
+              job.role_type
+            ]
+              .filter(Boolean)
+              .join(' ')
+              .toLowerCase();
+
+            const relevant = relevanceKeywords.some(
+              keyword => searchableText.includes(keyword)
+            );
+
+            if (!relevant) {
+              continue;
+            }
 
             const sourceJobId = `HOPIN_${job.id}`;
+
+            if (seenHopinJobs.has(sourceJobId)) {
+              continue;
+            }
+
+            seenHopinJobs.add(sourceJobId);
+            hopinMatched++;
 
             if (await jobExists(sourceJobId)) {
               hopinSkipped++;
@@ -388,26 +403,16 @@ export default async ({ req, res, log, error }) => {
                 source: 'Hopin',
                 job_title: job.title || 'Unknown',
                 company_name: job.company || 'Unknown',
-
-                // Hopin does not currently expose the employer
-                // application URL in the public job schema.
                 job_url: '',
-
                 location: job.location || 'India',
                 job_description: job.description || '',
                 job_type: job.job_type || 'job',
-
-                // Hopin's public jobs endpoint is specifically
-                // fresher / entry-level focused.
                 experience_required: 'Entry-level/Fresher',
-
                 education_required: 'Unknown',
-
                 salary_range:
                   job.ctc_amount ||
                   job.salary ||
                   'Not disclosed',
-
                 work_mode: job.work_type || 'Unknown',
                 industry: job.industry || 'Unknown',
                 department: job.role_type || 'Unknown',
@@ -436,14 +441,9 @@ export default async ({ req, res, log, error }) => {
       }
 
     } catch (hopinError) {
-
-      // Do NOT let one failed source break the other sources.
       hopinStatus = 'PARTIAL_SUCCESS';
-
       error(`Hopin: ${hopinError.message}`);
     }
-    // =======================================================
-    // RESULT
     // =======================================================
 
     return res.json({
