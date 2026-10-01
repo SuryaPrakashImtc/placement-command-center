@@ -1,3 +1,4 @@
+// Opportunity Intelligence Agent
 import { Client, TablesDB, Query } from 'node-appwrite';
 
 const DATABASE_ID = '6aa03d1800119759c9bb';
