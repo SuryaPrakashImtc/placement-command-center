@@ -9,84 +9,103 @@ export default async ({ req, res, log, error }) => {
 
     const tablesDB = new TablesDB(client);
 
-    const response = await fetch(
-      'https://remotive.com/api/remote-jobs?category=marketing&limit=10'
-    );
+    const categories = [
+      'marketing',
+      'sales',
+      'data-analysis'
+    ];
 
-    if (!response.ok) {
-      throw new Error(`Remotive API returned ${response.status}`);
-    }
-
-    const data = await response.json();
-
+    let jobsFound = 0;
     let saved = 0;
     let skipped = 0;
 
-    for (const job of data.jobs) {
-      const sourceJobId = String(job.id);
+    for (const category of categories) {
 
-      const existing = await tablesDB.listRows({
-        databaseId: '6aa03d1800119759c9bb',
-        tableId: 'jobs',
-        queries: [
-          Query.equal('source_job_id', sourceJobId)
-        ]
-      });
+      const response = await fetch(
+        `https://remotive.com/api/remote-jobs?category=${category}&limit=10`
+      );
 
-      if (existing.rows.length > 0) {
-        skipped++;
-        continue;
+      if (!response.ok) {
+        throw new Error(
+          `Remotive API returned ${response.status} for ${category}`
+        );
       }
 
-      await tablesDB.createRow({
-        databaseId: '6aa03d1800119759c9bb',
-        tableId: 'jobs',
-        rowId: ID.unique(),
-        data: {
-          source: 'Remotive',
-          job_title: job.title,
-          company_name: job.company_name,
-          job_url: job.url,
-          location: job.candidate_required_location || 'Remote',
-          job_description: job.description || '',
-          job_type: job.job_type || 'Unknown',
-          experience_required: 'Unknown',
-          education_required: 'Unknown',
-          salary_range: job.salary || 'Not disclosed',
-          work_mode: 'Remote',
-          industry: 'Unknown',
-          department: job.category || 'Marketing',
-          function: 'Marketing',
-          company_size: 'Unknown',
-          company_type: 'Unknown',
-          job_posted_date: job.publication_date || null,
-          application_deadline: null,
-          job_status: 'OPEN',
-          eligibility_status: 'UNKNOWN',
-          match_status: 'UNKNOWN',
-          application_status: 'NOT_APPLIED',
-          discovery_date: new Date().toISOString(),
-          job_id: `REMOTIVE_${sourceJobId}`,
-          source_job_id: sourceJobId,
-          company_id: null,
-          source_platform: 'Remotive',
-          first_seen_date: new Date().toISOString(),
-          last_updated_date: new Date().toISOString()
-        }
-      });
+      const data = await response.json();
 
-      saved++;
+      jobsFound += data.jobs.length;
+
+      for (const job of data.jobs) {
+
+        const sourceJobId = String(job.id);
+
+        const existing = await tablesDB.listRows({
+          databaseId: '6aa03d1800119759c9bb',
+          tableId: 'jobs',
+          queries: [
+            Query.equal('source_job_id', sourceJobId)
+          ]
+        });
+
+        if (existing.rows.length > 0) {
+          skipped++;
+          continue;
+        }
+
+        const now = new Date().toISOString();
+
+        await tablesDB.createRow({
+          databaseId: '6aa03d1800119759c9bb',
+          tableId: 'jobs',
+          rowId: ID.unique(),
+          data: {
+            source: 'Remotive',
+            job_title: job.title,
+            company_name: job.company_name,
+            job_url: job.url,
+            location: job.candidate_required_location || 'Remote',
+            job_description: job.description || '',
+            job_type: job.job_type || 'Unknown',
+            experience_required: 'Unknown',
+            education_required: 'Unknown',
+            salary_range: job.salary || 'Not disclosed',
+            work_mode: 'Remote',
+            industry: 'Unknown',
+            department: category,
+            function: category,
+            company_size: 'Unknown',
+            company_type: 'Unknown',
+            job_posted_date: job.publication_date || null,
+            application_deadline: null,
+            job_status: 'OPEN',
+            eligibility_status: 'UNKNOWN',
+            match_status: 'UNKNOWN',
+            application_status: 'NOT_APPLIED',
+            discovery_date: now,
+            job_id: `REMOTIVE_${sourceJobId}`,
+            source_job_id: sourceJobId,
+            company_id: null,
+            source_platform: 'Remotive',
+            first_seen_date: now,
+            last_updated_date: now
+          }
+        });
+
+        saved++;
+      }
     }
 
     return res.json({
       status: 'SUCCESS',
       source: 'Remotive',
-      jobsFound: data.jobs.length,
+      categoriesSearched: categories,
+      jobsFound,
       jobsSaved: saved,
       jobsSkippedAsDuplicate: skipped
     });
 
   } catch (err) {
+
     error(err.message);
 
     return res.json({
