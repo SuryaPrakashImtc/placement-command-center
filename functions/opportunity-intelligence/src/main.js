@@ -1663,8 +1663,8 @@ export default async ({
             company.name,
 
           company_url:
-            '',
-
+  null,
+  
           signal_type:
             bestSignal.signalType,
 
@@ -1678,8 +1678,8 @@ export default async ({
             'Tavily',
 
           signal_url:
-            bestSignal.url || '',
-
+  bestSignal.url || null,
+          
           signal_evidence:
             JSON.stringify(
               signalEvidence
