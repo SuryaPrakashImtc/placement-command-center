@@ -2,7 +2,7 @@ import { Client, TablesDB, Query } from 'node-appwrite';
 
 const DATABASE_ID = '6aa03d1800119759c9bb';
 const JOBS_TABLE_ID = 'jobs';
-const PROACTIVE_TABLE_ID = 'proactive_opportunities';
+const PROACTIVE_TABLE_ID = '6abecc4c00069d0c8a5b';
 
 const MAX_COMPANIES_PER_RUN = 12;
 
