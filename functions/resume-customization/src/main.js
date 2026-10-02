@@ -1,7 +1,9 @@
 import {
   Client,
+  TablesDB,
   Storage,
-  ID
+  ID,
+  Query
 } from 'node-appwrite';
 
 import { InputFile } from 'node-appwrite/file';
