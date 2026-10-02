@@ -18,8 +18,7 @@ const DATABASE_ID =
 const JOBS_TABLE_ID =
   'jobs';
 
-const RESUME_BUCKET_ID =
-  'resume-files';
+const STORAGE_BUCKET_ID = '6ac038600011e9e4bc37';
 
 const MASTER_FILENAME =
   'MASTER CV FP(5).docx';
