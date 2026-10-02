@@ -1,11 +1,10 @@
 import {
   Client,
-  TablesDB,
   Storage,
-  Query,
-  ID,
-  InputFile
+  ID
 } from 'node-appwrite';
+
+import { InputFile } from 'node-appwrite/file';
 
 import JSZip from 'jszip';
 
