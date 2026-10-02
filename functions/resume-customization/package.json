@@ -8,6 +8,8 @@
     "start": "node src/main.js"
   },
   "dependencies": {
+    "@google/genai": "^1.0.0",
+    "jszip": "^3.10.2",
     "node-appwrite": "^29.0.0"
   }
 }
