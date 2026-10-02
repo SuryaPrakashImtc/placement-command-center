@@ -21,8 +21,8 @@ const PROACTIVE_TABLE_ID = '6abecc4c00069d0c8a5b';
   DISCOVERY_SEARCHES_PER_RUN can be increased.
   PEOPLE_RESEARCH_PER_RUN can also be increased.
 */
-const DISCOVERY_SEARCHES_PER_RUN = 2;
-const PEOPLE_RESEARCH_PER_RUN = 2;
+const DISCOVERY_SEARCHES_PER_RUN = 6;
+const PEOPLE_RESEARCH_PER_RUN = 6;
 
 const TARGET_FUNCTIONS = {
   marketing: [
