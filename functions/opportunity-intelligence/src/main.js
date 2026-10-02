@@ -4,9 +4,10 @@ const DATABASE_ID = '6aa03d1800119759c9bb';
 const JOBS_TABLE_ID = 'jobs';
 const PROACTIVE_TABLE_ID = '6abecc4c00069d0c8a5b';
 
-// TEST MODE.
-// After successful testing, we will increase this for the daily run.
-const MAX_COMPANIES_PER_RUN = 2;
+// DIAGNOSTIC MODE
+// 0 = no Tavily searches.
+// We are only checking whether proactive rows actually exist.
+const MAX_COMPANIES_PER_RUN = 0;
 
 // =======================================================
 // TARGET FUNCTIONS
@@ -110,6 +111,15 @@ function toIsoDate(value) {
 
 function unique(values) {
   return [...new Set(values.filter(Boolean))];
+}
+
+function containsAny(text, keywords) {
+  const normalized = normalize(text);
+
+  return keywords.some(
+    keyword =>
+      normalized.includes(keyword)
+  );
 }
 
 // =======================================================
@@ -320,7 +330,10 @@ function inferFunction(signalText, companyJobs) {
 // EXISTING JOB SCORING
 // =======================================================
 
-function calculateExistingScore(job, companyJobCount) {
+function calculateExistingScore(
+  job,
+  companyJobCount
+) {
 
   const jobText = normalize([
     job.job_title,
@@ -330,7 +343,9 @@ function calculateExistingScore(job, companyJobCount) {
     job.job_description
   ].join(' '));
 
-  let candidateRelevance = 0;
+  // ---------------------------------------------------
+  // Candidate Relevance — 40
+  // ---------------------------------------------------
 
   const allKeywords = [
     ...TARGET_FUNCTIONS.marketing,
@@ -344,6 +359,8 @@ function calculateExistingScore(job, companyJobCount) {
       allKeywords
     );
 
+  let candidateRelevance = 0;
+
   if (roleMatches >= 5) {
     candidateRelevance = 40;
   } else if (roleMatches >= 3) {
@@ -356,12 +373,17 @@ function calculateExistingScore(job, companyJobCount) {
     candidateRelevance = 5;
   }
 
+  // ---------------------------------------------------
+  // Recency — 20
+  // ---------------------------------------------------
+
   const age =
     daysAgo(job.job_posted_date);
 
   let recency = 3;
 
   if (age !== null) {
+
     if (age <= 1) {
       recency = 20;
     } else if (age <= 3) {
@@ -377,6 +399,10 @@ function calculateExistingScore(job, companyJobCount) {
     }
   }
 
+  // ---------------------------------------------------
+  // Hiring Likelihood — 15
+  // ---------------------------------------------------
+
   let hiringLikelihood = 3;
 
   if (companyJobCount >= 5) {
@@ -387,13 +413,16 @@ function calculateExistingScore(job, companyJobCount) {
     hiringLikelihood = 9;
   }
 
-  // The existence of an actual live job is itself evidence
-  // of hiring activity.
+  // A live vacancy is itself evidence of active hiring.
   hiringLikelihood = clamp(
     hiringLikelihood + 5,
     0,
     15
   );
+
+  // ---------------------------------------------------
+  // Company Quality — 10
+  // ---------------------------------------------------
 
   let companyQuality = 5;
 
@@ -411,21 +440,24 @@ function calculateExistingScore(job, companyJobCount) {
     companyQuality += 2;
   }
 
-  if (
-    job.company_size &&
-    normalize(job.company_size) !== 'unknown'
-  ) {
-    companyQuality += 2;
-  }
-
   companyQuality = clamp(
     companyQuality,
     0,
     10
   );
 
-  // No external signal is NOT a negative score.
+  // ---------------------------------------------------
+  // Signal Strength — 10
+  // ---------------------------------------------------
+  //
+  // No external signal is NOT a negative.
+  // We give a neutral baseline.
+
   const signalStrength = 5;
+
+  // ---------------------------------------------------
+  // Evidence Confidence — 5
+  // ---------------------------------------------------
 
   let evidenceConfidence = 2;
 
@@ -433,15 +465,15 @@ function calculateExistingScore(job, companyJobCount) {
     job.job_title &&
     job.job_description
   ) {
-    evidenceConfidence += 1;
+    evidenceConfidence++;
   }
 
   if (job.company_name) {
-    evidenceConfidence += 1;
+    evidenceConfidence++;
   }
 
   if (job.job_posted_date) {
-    evidenceConfidence += 1;
+    evidenceConfidence++;
   }
 
   evidenceConfidence =
@@ -450,6 +482,10 @@ function calculateExistingScore(job, companyJobCount) {
       0,
       5
     );
+
+  // ---------------------------------------------------
+  // TOTAL
+  // ---------------------------------------------------
 
   const total =
     clamp(
@@ -504,39 +540,38 @@ function proactiveCandidateRelevance(
     score = 17;
   }
 
-  const companyJobText = normalize(
-    companyJobs
-      .map(job => [
-        job.job_title,
-        job.department,
-        job.function
-      ].join(' '))
-      .join(' ')
-  );
+  const companyJobText =
+    normalize(
+      companyJobs
+        .map(job => [
+          job.job_title,
+          job.department,
+          job.function
+        ].join(' '))
+        .join(' ')
+    );
+
+  const relevantKeywords =
+    likelyFunction === 'Marketing'
+      ? TARGET_FUNCTIONS.marketing
+      : likelyFunction ===
+        'Sales / Business Development'
+      ? TARGET_FUNCTIONS.sales
+      : TARGET_FUNCTIONS.analytics;
 
   if (
     containsAny(
       companyJobText,
-      likelyFunction === 'Marketing'
-        ? TARGET_FUNCTIONS.marketing
-        : likelyFunction ===
-          'Sales / Business Development'
-        ? TARGET_FUNCTIONS.sales
-        : TARGET_FUNCTIONS.analytics
+      relevantKeywords
     )
   ) {
     score = 20;
   }
 
-  return clamp(score, 0, 20);
-}
-
-function containsAny(text, keywords) {
-  const normalized = normalize(text);
-
-  return keywords.some(
-    keyword =>
-      normalized.includes(keyword)
+  return clamp(
+    score,
+    0,
+    20
   );
 }
 
@@ -607,6 +642,7 @@ function isFunctionalLeader(
   text,
   likelyFunction
 ) {
+
   if (
     !containsAny(
       text,
@@ -657,6 +693,7 @@ function isFunctionalLeader(
 }
 
 function extractPersonName(title) {
+
   let value =
     String(title || '')
       .replace(
@@ -692,6 +729,7 @@ async function researchPeople(
   companyName,
   likelyFunction
 ) {
+
   const query =
     `"${companyName}" ` +
     `(HR OR "Human Resources" OR ` +
@@ -777,7 +815,7 @@ async function researchPeople(
     people.find(
       person =>
         person.roleType ===
-        'Functional Leader' &&
+          'Functional Leader' &&
         person.name !==
           primary?.name
     ) || null;
@@ -798,13 +836,14 @@ function buildOutreachAngle(
   signalType,
   likelyFunction
 ) {
+
   let signalAngle;
 
   switch (signalType) {
 
     case 'EXPANSION':
       signalAngle =
-        'Reference the specific expansion and demonstrate that you noticed the development before a role was publicly advertised.';
+        'Reference the specific expansion and demonstrate that you noticed it before a role was publicly advertised.';
       break;
 
     case 'FUNDING':
@@ -837,21 +876,28 @@ function buildOutreachAngle(
   if (
     likelyFunction === 'Marketing'
   ) {
+
     candidateBridge =
       'Bridge this to your B2B marketing communications, commercial product-launch, stakeholder, agency and event experience.';
+
   } else if (
     likelyFunction ===
     'Sales / Business Development'
   ) {
+
     candidateBridge =
       'Bridge this to your B2B prospecting, lead generation, client acquisition and stakeholder experience.';
+
   } else if (
     likelyFunction ===
     'Analytics / Insights'
   ) {
+
     candidateBridge =
       'Bridge this to your Power BI, Excel/Power Query/Power Pivot/DAX and commercial/marketing analytics work.';
+
   } else {
+
     candidateBridge =
       'Bridge this to your combination of marketing, B2B and analytics experience.';
   }
@@ -906,7 +952,7 @@ async function fetchAllJobs(tablesDB) {
 }
 
 // =======================================================
-// UPSERT PROACTIVE RECORD
+// UPSERT PROACTIVE
 // =======================================================
 
 async function upsertProactive(
@@ -991,7 +1037,12 @@ export default async ({
       );
     }
 
-    if (!tavilyKey) {
+    // Tavily is intentionally NOT required for
+    // diagnostic mode because MAX_COMPANIES_PER_RUN = 0.
+    if (
+      MAX_COMPANIES_PER_RUN > 0 &&
+      !tavilyKey
+    ) {
       throw new Error(
         'TAVILY_API_KEY is missing. Redeploy after adding the project variable.'
       );
@@ -1015,7 +1066,7 @@ export default async ({
       new TablesDB(client);
 
     // ===================================================
-    // LOAD JOBS
+    // LOAD ALL JOBS
     // ===================================================
 
     const allJobs =
@@ -1024,7 +1075,7 @@ export default async ({
       );
 
     // ===================================================
-    // COMPANY GROUPS
+    // COMPANY GROUPING
     // ===================================================
 
     const companyMap =
@@ -1081,9 +1132,6 @@ export default async ({
     let existingSkipped = 0;
     let existingFailed = 0;
 
-    const companySignalCache =
-      new Map();
-
     for (const job of allJobs) {
 
       try {
@@ -1125,6 +1173,7 @@ export default async ({
           rowId:
             job.$id,
           data: {
+
             opportunity_score:
               result.total,
 
@@ -1170,11 +1219,13 @@ export default async ({
           'PRIORITY'
         ) {
           existingPriority++;
+
         } else if (
           result.status ===
           'WATCH'
         ) {
           existingWatch++;
+
         } else {
           existingBacklog++;
         }
@@ -1190,7 +1241,7 @@ export default async ({
     }
 
     // ===================================================
-    // PROACTIVE INTELLIGENCE
+    // PROACTIVE COMPANY SELECTION
     // ===================================================
 
     const dayNumber =
@@ -1217,6 +1268,7 @@ export default async ({
       );
       i++
     ) {
+
       companiesToCheck.push(
         companies[
           (startIndex + i) %
@@ -1224,6 +1276,10 @@ export default async ({
         ]
       );
     }
+
+    // ===================================================
+    // PROACTIVE INTELLIGENCE
+    // ===================================================
 
     let signalSearches = 0;
     let peopleSearches = 0;
@@ -1234,7 +1290,8 @@ export default async ({
     let proactiveErrors = 0;
 
     for (
-      const company of companiesToCheck
+      const company
+      of companiesToCheck
     ) {
 
       try {
@@ -1272,11 +1329,10 @@ export default async ({
           results
             .map(result => {
 
-              const combined =
-                [
-                  result.title,
-                  result.content
-                ].join(' ');
+              const combined = [
+                result.title,
+                result.content
+              ].join(' ');
 
               return {
                 title:
@@ -1338,7 +1394,7 @@ export default async ({
           );
 
         // -------------------------------------------------
-        // INFER LIKELY FUNCTION
+        // LIKELY FUNCTION
         // -------------------------------------------------
 
         const likelyFunction =
@@ -1388,7 +1444,40 @@ export default async ({
         }
 
         // -------------------------------------------------
-        // PROACTIVE SCORES
+        // COMPANY QUALITY
+        // -------------------------------------------------
+
+        let companyQuality = 8;
+
+        if (company.name) {
+          companyQuality += 4;
+        }
+
+        if (
+          company.jobs.length >= 5
+        ) {
+          companyQuality += 8;
+
+        } else if (
+          company.jobs.length >= 3
+        ) {
+          companyQuality += 5;
+
+        } else if (
+          company.jobs.length >= 2
+        ) {
+          companyQuality += 3;
+        }
+
+        companyQuality =
+          clamp(
+            companyQuality,
+            0,
+            20
+          );
+
+        // -------------------------------------------------
+        // SIGNAL STRENGTH
         // -------------------------------------------------
 
         let signalStrength = 0;
@@ -1408,17 +1497,18 @@ export default async ({
             age <= 7
           ) {
             signalStrength += 8;
+
           } else if (
             age !== null &&
             age <= 14
           ) {
             signalStrength += 6;
+
           } else {
             signalStrength += 4;
           }
         }
 
-        // Diversity is additional evidence.
         signalStrength +=
           Math.min(
             signalTypes.length * 2,
@@ -1432,27 +1522,9 @@ export default async ({
             30
           );
 
-        let companyQuality = 8;
-
-        if (
-          company.name
-        ) {
-          companyQuality += 4;
-        }
-
-        if (
-          company.jobs.length >= 5
-        ) {
-          companyQuality += 8;
-        } else if (
-          company.jobs.length >= 3
-        ) {
-          companyQuality += 5;
-        } else if (
-          company.jobs.length >= 2
-        ) {
-          companyQuality += 3;
-        }
+        // -------------------------------------------------
+        // CANDIDATE RELEVANCE
+        // -------------------------------------------------
 
         const candidateRelevance =
           proactiveCandidateRelevance(
@@ -1460,16 +1532,22 @@ export default async ({
             company.jobs
           );
 
+        // -------------------------------------------------
+        // HIRING LIKELIHOOD
+        // -------------------------------------------------
+
         let hiringLikelihood = 4;
 
         if (
           company.jobs.length >= 5
         ) {
           hiringLikelihood += 5;
+
         } else if (
           company.jobs.length >= 3
         ) {
           hiringLikelihood += 4;
+
         } else if (
           company.jobs.length >= 2
         ) {
@@ -1505,6 +1583,10 @@ export default async ({
             15
           );
 
+        // -------------------------------------------------
+        // RECENCY
+        // -------------------------------------------------
+
         const signalAge =
           daysAgo(
             bestSignal.publishedDate
@@ -1515,18 +1597,27 @@ export default async ({
         if (
           signalAge !== null
         ) {
+
           if (signalAge <= 1) {
             recency = 10;
+
           } else if (signalAge <= 3) {
             recency = 9;
+
           } else if (signalAge <= 7) {
             recency = 8;
+
           } else if (signalAge <= 14) {
             recency = 6;
+
           } else if (signalAge <= 30) {
             recency = 4;
           }
         }
+
+        // -------------------------------------------------
+        // EVIDENCE CONFIDENCE
+        // -------------------------------------------------
 
         let evidenceConfidence = 2;
 
@@ -1556,6 +1647,10 @@ export default async ({
             5
           );
 
+        // -------------------------------------------------
+        // PROACTIVE SCORE
+        // -------------------------------------------------
+
         const proactiveScore =
           calculateProactiveScore({
             companyQuality,
@@ -1578,6 +1673,10 @@ export default async ({
             hasPerson
           );
 
+        // -------------------------------------------------
+        // CURRENT JOB INDICATOR
+        // -------------------------------------------------
+
         const currentRelevantJob =
           company.jobs.some(
             job =>
@@ -1588,7 +1687,7 @@ export default async ({
           );
 
         // -------------------------------------------------
-        // BUILD RECORD
+        // EVIDENCE
         // -------------------------------------------------
 
         const signalEvidence = {
@@ -1598,7 +1697,10 @@ export default async ({
           bestSignal,
 
           additionalSignals:
-            signalResults.slice(1, 5),
+            signalResults.slice(
+              1,
+              5
+            ),
 
           signalTypes
         };
@@ -1658,13 +1760,18 @@ export default async ({
           }
         };
 
+        // -------------------------------------------------
+        // PROACTIVE ROW
+        // -------------------------------------------------
+
         const payload = {
+
           company_name:
             company.name,
 
           company_url:
-  null,
-  
+            null,
+
           signal_type:
             bestSignal.signalType,
 
@@ -1678,8 +1785,8 @@ export default async ({
             'Tavily',
 
           signal_url:
-  bestSignal.url || null,
-          
+            bestSignal.url || null,
+
           signal_evidence:
             JSON.stringify(
               signalEvidence
@@ -1731,21 +1838,25 @@ export default async ({
           next_check_date:
             new Date(
               Date.now() +
-              7 * 24 * 60 * 60 * 1000
+              7 *
+              24 *
+              60 *
+              60 *
+              1000
             ).toISOString()
         };
 
-        const upsertResult =
+        const result =
           await upsertProactive(
             tablesDB,
             payload
           );
 
         if (
-          upsertResult ===
-          'CREATED'
+          result === 'CREATED'
         ) {
           proactiveCreated++;
+
         } else {
           proactiveUpdated++;
         }
@@ -1759,6 +1870,23 @@ export default async ({
         );
       }
     }
+
+    // ===================================================
+    // DIAGNOSTIC TABLE CHECK
+    // ===================================================
+
+    const proactiveTableCheck =
+      await tablesDB.listRows({
+        databaseId:
+          DATABASE_ID,
+
+        tableId:
+          PROACTIVE_TABLE_ID,
+
+        queries: [
+          Query.limit(10)
+        ]
+      });
 
     // ===================================================
     // RESULT
@@ -1821,6 +1949,32 @@ export default async ({
           proactiveErrors
       },
 
+      // IMPORTANT:
+      // This directly checks the table from inside
+      // the Function, without using Tavily.
+      proactiveTableCheck: {
+
+        rowsVisibleToFunction:
+          proactiveTableCheck.rows.length,
+
+        rows:
+          proactiveTableCheck.rows.map(
+            row => ({
+              id:
+                row.$id,
+
+              company:
+                row.company_name,
+
+              signal:
+                row.signal_type,
+
+              score:
+                row.proactive_score
+            })
+          )
+      },
+
       estimatedTavilyCredits:
         signalSearches +
         peopleSearches
@@ -1833,8 +1987,11 @@ export default async ({
     );
 
     return res.json({
-      status: 'FAILED',
-      error: err.message
+      status:
+        'FAILED',
+
+      error:
+        err.message
     }, 500);
   }
 };
