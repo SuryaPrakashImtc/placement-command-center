@@ -4,7 +4,7 @@ const DATABASE_ID = '6aa03d1800119759c9bb';
 const JOBS_TABLE_ID = 'jobs';
 const PROACTIVE_TABLE_ID = '6abecc4c00069d0c8a5b';
 
-const MAX_COMPANIES_PER_RUN = 12;
+const MAX_COMPANIES_PER_RUN = 3;
 
 // =======================================================
 // CANDIDATE TARGETS
