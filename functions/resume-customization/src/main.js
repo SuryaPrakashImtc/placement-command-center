@@ -6,8 +6,6 @@ import {
   Query
 } from 'node-appwrite';
 
-import { InputFile } from 'node-appwrite/file';
-
 import JSZip from 'jszip';
 
 const DATABASE_ID =
@@ -25,17 +23,16 @@ const MASTER_FILENAME =
 const GEMINI_MODEL =
   'gemini-2.5-flash-lite';
 
-
 // =======================================================
-// MASTER CV PARAGRAPH MAP
+// LOCKED MASTER CV MAP
 // =======================================================
 //
-// The master CV is intentionally treated as a LOCKED
-// TEMPLATE. These paragraph positions correspond to the
-// uploaded master CV.
+// These are the exact paragraph indexes from the current
+// master CV.
 //
-// We do not redesign anything.
-// We only remove or replace text.
+// We change CONTENT only.
+// We preserve the existing Word document structure,
+// formatting, styles, headers, margins, etc.
 //
 // =======================================================
 
@@ -135,15 +132,15 @@ function extractParagraphs(xml) {
 }
 
 function paragraphText(paragraphXml) {
-  const texts = [
+  return [
     ...paragraphXml.matchAll(
       /<w:t\b[^>]*>([\s\S]*?)<\/w:t>/g
     )
-  ].map(match =>
-    decodeXml(match[1])
-  );
-
-  return texts.join('');
+  ]
+    .map(match =>
+      decodeXml(match[1])
+    )
+    .join('');
 }
 
 function runStyle(runXml) {
@@ -161,7 +158,6 @@ function replaceParagraphText(
   paragraphXml,
   newText
 ) {
-
   const runs = [
     ...paragraphXml.matchAll(
       /<w:r\b[^>]*>[\s\S]*?<\/w:r>/g
@@ -175,13 +171,9 @@ function replaceParagraphText(
     };
   }
 
-  /*
-    We only rewrite paragraphs whose runs all use
-    the same formatting.
-
-    This protects bold/italic mixed formatting in
-    internship bullets, achievements, skill labels, etc.
-  */
+  // We only rewrite paragraphs whose runs share the
+  // same formatting. This prevents accidental formatting
+  // changes to mixed-format paragraphs.
 
   const styles =
     runs.map(run =>
@@ -198,11 +190,10 @@ function replaceParagraphText(
     };
   }
 
-  const firstRun =
-    runs[0][0];
-
   const properties =
-    runStyle(firstRun);
+    runStyle(
+      runs[0][0]
+    );
 
   const newRun =
     `<w:r>` +
@@ -215,12 +206,15 @@ function replaceParagraphText(
   const runRegex =
     /<w:r\b[^>]*>[\s\S]*?<\/w:r>/g;
 
+  const cleaned =
+    paragraphXml.replace(
+      runRegex,
+      ''
+    );
+
   return {
     xml:
-      paragraphXml.replace(
-        runRegex,
-        () => ''
-      ).replace(
+      cleaned.replace(
         /(<w:p\b[^>]*>)/,
         `$1${newRun}`
       ),
@@ -231,30 +225,12 @@ function replaceParagraphText(
 
 
 // =======================================================
-// REMOVE PARAGRAPHS
-// =======================================================
-
-function removeParagraphsByIndex(
-  paragraphs,
-  removeIndexes
-) {
-
-  return paragraphs
-    .filter(
-      (_, index) =>
-        !removeIndexes.has(index)
-    );
-}
-
-
-// =======================================================
 // FIND MASTER CV
 // =======================================================
 
 async function findMasterFile(
   storage
 ) {
-
   const response =
     await storage.listFiles({
       bucketId:
@@ -279,7 +255,7 @@ async function findMasterFile(
 
   if (!file) {
     throw new Error(
-      `Master CV "${MASTER_FILENAME}" was not found in Appwrite Storage bucket "${RESUME_BUCKET_ID}".`
+      `Master CV "${MASTER_FILENAME}" was not found in bucket "${RESUME_BUCKET_ID}".`
     );
   }
 
@@ -295,7 +271,6 @@ async function downloadMasterCV(
   storage,
   fileId
 ) {
-
   const data =
     await storage.getFileDownload({
       bucketId:
@@ -316,9 +291,10 @@ async function findTargetJob(
   tablesDB
 ) {
 
-  /*
-    Prefer a high-match + priority job.
-  */
+  // ---------------------------------------------------
+  // Preferred:
+  // Eligible + High match + Priority
+  // ---------------------------------------------------
 
   let response =
     await tablesDB.listRows({
@@ -353,14 +329,15 @@ async function findTargetJob(
     });
 
   if (
-    response.rows?.length
+    response.rows?.length > 0
   ) {
     return response.rows[0];
   }
 
-  /*
-    Fallback to any high-match eligible job.
-  */
+  // ---------------------------------------------------
+  // Fallback:
+  // Eligible + High match
+  // ---------------------------------------------------
 
   response =
     await tablesDB.listRows({
@@ -390,14 +367,15 @@ async function findTargetJob(
     });
 
   if (
-    response.rows?.length
+    response.rows?.length > 0
   ) {
     return response.rows[0];
   }
 
-  /*
-    Final fallback to any eligible job.
-  */
+  // ---------------------------------------------------
+  // Final fallback:
+  // Any eligible job
+  // ---------------------------------------------------
 
   response =
     await tablesDB.listRows({
@@ -422,7 +400,7 @@ async function findTargetJob(
     });
 
   if (
-    response.rows?.length
+    response.rows?.length > 0
   ) {
     return response.rows[0];
   }
@@ -434,13 +412,12 @@ async function findTargetJob(
 
 
 // =======================================================
-// EXTRACT MASTER CV TEXT
+// READ MASTER DOCX
 // =======================================================
 
 async function readMasterDocument(
   masterBuffer
 ) {
-
   const zip =
     await JSZip.loadAsync(
       masterBuffer
@@ -453,7 +430,7 @@ async function readMasterDocument(
 
   if (!documentFile) {
     throw new Error(
-      'word/document.xml not found in master CV.'
+      'word/document.xml was not found in the master CV.'
     );
   }
 
@@ -479,7 +456,7 @@ async function callGemini(
 ) {
 
   const url =
-    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(apiKey)}`;
+    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
 
   const response =
     await fetch(
@@ -489,7 +466,10 @@ async function callGemini(
 
         headers: {
           'Content-Type':
-            'application/json'
+            'application/json',
+
+          'x-goog-api-key':
+            apiKey
         },
 
         body:
@@ -511,7 +491,7 @@ async function callGemini(
             generationConfig: {
 
               temperature:
-                0.15,
+                0.1,
 
               maxOutputTokens:
                 3000,
@@ -527,11 +507,13 @@ async function callGemini(
                 properties: {
 
                   summary: {
-                    type: 'STRING'
+                    type:
+                      'STRING'
                   },
 
                   projectsToKeep: {
-                    type: 'ARRAY',
+                    type:
+                      'ARRAY',
 
                     items: {
                       type:
@@ -540,7 +522,8 @@ async function callGemini(
                   },
 
                   certificationsToKeep: {
-                    type: 'ARRAY',
+                    type:
+                      'ARRAY',
 
                     items: {
                       type:
@@ -549,7 +532,8 @@ async function callGemini(
                   },
 
                   achievementsToKeep: {
-                    type: 'ARRAY',
+                    type:
+                      'ARRAY',
 
                     items: {
                       type:
@@ -558,7 +542,9 @@ async function callGemini(
                   },
 
                   projectRewrites: {
-                    type: 'ARRAY',
+
+                    type:
+                      'ARRAY',
 
                     items: {
 
@@ -608,14 +594,27 @@ async function callGemini(
     );
   }
 
-  const data =
-    JSON.parse(
-      responseText
+  let data;
+
+  try {
+    data =
+      JSON.parse(
+        responseText
+      );
+  } catch {
+    throw new Error(
+      'Gemini API returned invalid JSON.'
     );
+  }
 
   const text =
-    data?.candidates?.[0]?.content?.parts
-      ?.map(part => part.text || '')
+    data
+      ?.candidates?.[0]
+      ?.content?.parts
+      ?.map(
+        part =>
+          part.text || ''
+      )
       .join('')
       .trim();
 
@@ -626,19 +625,17 @@ async function callGemini(
   }
 
   try {
-    return JSON.parse(
-      text
-    );
+    return JSON.parse(text);
   } catch {
     throw new Error(
-      'Gemini returned invalid JSON.'
+      'Gemini returned invalid structured JSON.'
     );
   }
 }
 
 
 // =======================================================
-// BUILD GEMINI PROMPT
+// GEMINI PROMPT
 // =======================================================
 
 function buildPrompt(
@@ -689,29 +686,42 @@ function buildPrompt(
     );
 
   return `
-You are the Resume Customization Agent.
+You are a strict Resume Customization Agent.
 
-You are editing a LOCKED master CV.
+You are customizing a LOCKED MASTER CV.
+
+THE MASTER CV IS THE SOURCE OF TRUTH.
 
 ABSOLUTE RULES:
 
-1. The CV must remain exactly the same visual template.
+1. The final CV must be exactly ONE PAGE.
 2. Never redesign the CV.
 3. Never change fonts.
 4. Never change font sizes.
 5. Never change margins.
 6. Never change colors.
-7. Never change section headings.
-8. Never change section order.
-9. Never add a new section.
-10. Never invent experience, skills, numbers, employers, achievements or qualifications.
-11. Only use evidence already present in the master CV.
-12. The final CV MUST be ONE PAGE.
-13. Content removal is allowed.
-14. Content rewriting is allowed only to improve relevance and clarity.
-15. Preserve the truth and substance of every claim.
+7. Never change spacing or visual styling intentionally.
+8. Never change section headings.
+9. Never change section order.
+10. Never create a new section.
+11. Never invent a skill.
+12. Never invent experience.
+13. Never invent metrics.
+14. Never invent employers.
+15. Never invent achievements.
+16. Never invent qualifications.
+17. Never change facts.
+18. Only use evidence already present in the master CV.
+19. Content can be removed.
+20. Content can be rewritten when the substance remains truthful.
+21. Preserve the master CV's formatting by changing text only.
+22. The internship section and education section must remain intact.
+23. Do not rewrite internship bullets.
+24. Do not rewrite education.
+25. Skills may be shortened only by removing less relevant skill content, never by inventing or changing facts.
+26. The output must remain a professional one-page resume.
 
-TARGET JOB:
+TARGET JOB
 
 Title:
 ${job.job_title}
@@ -737,8 +747,10 @@ ${job.education_required}
 Salary:
 ${job.salary_range}
 
-FULL JOB DESCRIPTION:
+JOB DESCRIPTION:
+
 ${job.job_description}
+
 
 MASTER CV PROJECTS:
 
@@ -748,6 +760,7 @@ ${JSON.stringify(
   2
 )}
 
+
 MASTER CV CERTIFICATIONS:
 
 ${JSON.stringify(
@@ -755,6 +768,7 @@ ${JSON.stringify(
   null,
   2
 )}
+
 
 MASTER CV ACHIEVEMENTS:
 
@@ -764,51 +778,61 @@ ${JSON.stringify(
   2
 )}
 
-YOUR TASK:
 
-Return a JSON edit plan.
+TASK
+
+Return ONLY a JSON edit plan.
 
 SUMMARY:
-Rewrite the Professional Summary specifically for this job.
+
+Rewrite the Professional Summary for the target role.
 
 Maximum:
 45 words.
 
 PROJECTS:
-Select exactly 3 project IDs that provide the strongest evidence for this job.
+
+Select exactly 2 or 3 projects.
+
+Choose the projects with the strongest evidence for the target role.
 
 CERTIFICATIONS:
-Select exactly 4 certification IDs.
+
+Select exactly 3 or 4 certifications.
 
 ACHIEVEMENTS:
-Select exactly 2 achievement IDs.
+
+Select exactly 1 or 2 achievements.
 
 PROJECT REWRITES:
-You may rewrite selected project bullet paragraphs when useful.
 
-A rewritten project bullet must:
-- remain factually identical in substance
-- use only existing evidence
-- be concise
-- be no more than 220 characters
-- improve alignment with the target job
+Rewrite selected project bullets only when useful.
 
-Do not rewrite a project bullet when no rewrite is needed.
+Each rewritten project bullet:
+- must remain factually true
+- must use only information in the master CV
+- must be concise
+- must not exceed 220 characters
+- must improve relevance to the target job
+- must not introduce new claims
 
-IMPORTANT:
-Do NOT modify internship bullets in this task.
-Do NOT modify education.
-Do NOT modify skills.
-Do NOT modify achievements.
-Do NOT modify certifications.
+DO NOT MODIFY:
+- internship bullets
+- education
+- section headings
+- layout
+- formatting
+- colors
+- fonts
+- margins
 
-The application layer will remove lower-priority content automatically.
+The downstream document engine will remove low-priority content to satisfy the one-page requirement.
 `;
 }
 
 
 // =======================================================
-// VALIDATE AI PLAN
+// VALIDATE GEMINI PLAN
 // =======================================================
 
 function validatePlan(
@@ -857,49 +881,58 @@ function validatePlan(
           )
       : [];
 
-  let summary =
-    String(
-      plan.summary || ''
-    ).replace(
-      /\s+/g,
-      ' '
-    ).trim();
-
-  /*
-    Hard safety limit for the summary.
-  */
-
-  if (
-    summary.length > 420
-  ) {
-    summary =
-      summary
-        .split(/\s+/)
-        .slice(0, 45)
-        .join(' ');
-  }
-
-  /*
-    If Gemini returns an invalid selection,
-    use safe fallback selections.
-  */
+  // ---------------------------------------------------
+  // Safe fallbacks
+  // ---------------------------------------------------
 
   const finalProjects =
-    projectIds.length >= 3
+    projectIds.length >= 2
       ? projectIds.slice(0, 3)
       : [24, 26, 30];
 
   const finalCertifications =
-    certificationIds.length >= 4
+    certificationIds.length >= 3
       ? certificationIds.slice(0, 4)
-      : [33, 34, 36, 37];
+      : [33, 34, 36];
 
   const finalAchievements =
-    achievementIds.length >= 2
+    achievementIds.length >= 1
       ? achievementIds.slice(0, 2)
       : [45, 46];
 
-  const allowedProjectIds =
+  // ---------------------------------------------------
+  // Summary
+  // ---------------------------------------------------
+
+  let summary =
+    String(
+      plan.summary || ''
+    )
+      .replace(
+        /\s+/g,
+        ' '
+      )
+      .trim();
+
+  const summaryWords =
+    summary.split(/\s+/)
+      .filter(Boolean);
+
+  if (
+    summaryWords.length > 45
+  ) {
+
+    summary =
+      summaryWords
+        .slice(0, 45)
+        .join(' ');
+  }
+
+  // ---------------------------------------------------
+  // Project rewrites
+  // ---------------------------------------------------
+
+  const allowedProjects =
     new Set(
       finalProjects
     );
@@ -911,43 +944,45 @@ function validatePlan(
       ? plan.projectRewrites
           .filter(
             item =>
-              allowedProjectIds.has(
+              allowedProjects.has(
                 Number(item.id)
               )
           )
-          .map(
-            item => {
+          .map(item => {
 
-              let text =
-                String(
-                  item.text || ''
+            let text =
+              String(
+                item.text || ''
+              )
+                .replace(
+                  /\s+/g,
+                  ' '
                 )
-                  .replace(
-                    /\s+/g,
-                    ' '
-                  )
-                  .trim();
+                .trim();
 
-              /*
-                Reject overly long AI rewrites.
-                Keeping the master text is safer
-                than allowing content overflow.
-              */
+            if (
+              text.length > 220
+            ) {
 
-              if (
-                text.length > 220
-              ) {
-                text = '';
-              }
-
-              return {
-                id:
-                  Number(item.id),
-
+              text =
                 text
-              };
+                  .slice(
+                    0,
+                    220
+                  )
+                  .replace(
+                    /\s+\S*$/,
+                    ''
+                  );
             }
-          )
+
+            return {
+              id:
+                Number(item.id),
+
+              text
+            };
+          })
           .filter(
             item =>
               Boolean(
@@ -975,7 +1010,14 @@ function validatePlan(
 
 
 // =======================================================
-// APPLY ONE-PAGE CONTENT BUDGET
+// ONE-PAGE CONTENT BUDGET
+// =======================================================
+//
+// The master CV is currently 2 pages.
+//
+// We preserve the visual template and create room
+// by removing content, NOT shrinking formatting.
+//
 // =======================================================
 
 function applyContentBudget(
@@ -987,14 +1029,6 @@ function applyContentBudget(
     extractParagraphs(
       originalXml
     );
-
-  /*
-    MANDATORY REMOVALS
-
-    These were validated against the exact master
-    CV to create a one-page version without changing
-    the visual template.
-  */
 
   const removeIndexes =
     new Set([
@@ -1010,7 +1044,7 @@ function applyContentBudget(
       // Remove Office Productivity skill.
       42,
 
-      // Remove complete extracurricular section.
+      // Remove entire extracurricular section.
       48,
       49,
       50,
@@ -1019,15 +1053,15 @@ function applyContentBudget(
       53,
       54,
 
-      // Remove complete Other Information section.
+      // Remove Other Information section.
       56,
       57,
       58
     ]);
 
-  /*
-    Keep exactly three projects.
-  */
+  // ---------------------------------------------------
+  // Keep selected projects
+  // ---------------------------------------------------
 
   const projectKeep =
     new Set(
@@ -1063,11 +1097,11 @@ function applyContentBudget(
     }
   }
 
-  /*
-    Keep exactly four certifications.
-  */
+  // ---------------------------------------------------
+  // Keep selected certifications
+  // ---------------------------------------------------
 
-  const certKeep =
+  const certificationKeep =
     new Set(
       plan.certificationsToKeep
     );
@@ -1080,7 +1114,7 @@ function applyContentBudget(
   ) {
 
     if (
-      !certKeep.has(
+      !certificationKeep.has(
         Number(id)
       )
     ) {
@@ -1091,9 +1125,9 @@ function applyContentBudget(
     }
   }
 
-  /*
-    Keep exactly two achievements.
-  */
+  // ---------------------------------------------------
+  // Keep selected achievements
+  // ---------------------------------------------------
 
   const achievementKeep =
     new Set(
@@ -1119,41 +1153,20 @@ function applyContentBudget(
     }
   }
 
-  /*
-    First remove the content we don't need.
-  */
-
-  const keptParagraphs =
-    paragraphs.filter(
-      (_, index) =>
-        !removeIndexes.has(
-          index
-        )
-    );
-
-  /*
-    Rewriting is done after filtering.
-
-    We identify paragraphs by their original text,
-    not by their shifted position.
-  */
+  // ---------------------------------------------------
+  // Rewrite map
+  // ---------------------------------------------------
 
   const rewriteMap =
     new Map();
 
-  /*
-    Summary paragraph.
-  */
-
+  // Professional Summary
   rewriteMap.set(
     5,
     plan.summary
   );
 
-  /*
-    Selected project bullets.
-  */
-
+  // Selected project bullets
   for (
     const rewrite
     of plan.projectRewrites
@@ -1161,7 +1174,9 @@ function applyContentBudget(
 
     const project =
       PROJECTS[
-        Number(rewrite.id)
+        Number(
+          rewrite.id
+        )
       ];
 
     if (!project) {
@@ -1174,24 +1189,18 @@ function applyContentBudget(
     );
   }
 
-  /*
-    Build a map from the text of each original
-    paragraph to its original index.
+  // ---------------------------------------------------
+  // Rebuild paragraph sequence
+  // ---------------------------------------------------
 
-    Master CV paragraphs are immutable, so this
-    is safe for this locked-template architecture.
-  */
-
-  const originalEntries =
-    paragraphs.map(
-      (xml, index) => ({
-        xml,
-        index
-      })
-    );
-
-  const rewrittenKept =
-    originalEntries
+  const outputParagraphs =
+    paragraphs
+      .map(
+        (xml, index) => ({
+          xml,
+          index
+        })
+      )
       .filter(
         ({ index }) =>
           !removeIndexes.has(
@@ -1199,7 +1208,10 @@ function applyContentBudget(
           )
       )
       .map(
-        ({ xml, index }) => {
+        ({
+          xml,
+          index
+        }) => {
 
           if (
             !rewriteMap.has(
@@ -1210,38 +1222,30 @@ function applyContentBudget(
             return xml;
           }
 
-          const newText =
-            rewriteMap.get(
-              index
-            );
-
-          const result =
-            replaceParagraphText(
+          const replacement =
+            rewriteParagraphTextSafe(
               xml,
-              newText
+              rewriteMap.get(
+                index
+              )
             );
 
-          /*
-            If the paragraph contains mixed
-            formatting, keep the original instead
-            of risking a formatting change.
-          */
-
-          return result.changed
-            ? result.xml
-            : xml;
+          return replacement;
         }
       );
 
-  /*
-    Replace the document body paragraph content
-    while preserving everything else in document.xml.
-
-    We rebuild only the body paragraph sequence.
-  */
+  // ---------------------------------------------------
+  // Remove stale rendered-page marker.
+  //
+  // It is not an intentional page break; it is Word's
+  // previously-rendered pagination marker.
+  // ---------------------------------------------------
 
   let outputXml =
-    originalXml;
+    originalXml.replace(
+      /<w:lastRenderedPageBreak\/>/g,
+      ''
+    );
 
   let cursor = 0;
 
@@ -1251,7 +1255,7 @@ function applyContentBudget(
       () => {
 
         const replacement =
-          rewrittenKept[
+          outputParagraphs[
             cursor
           ];
 
@@ -1268,9 +1272,25 @@ function applyContentBudget(
   return outputXml;
 }
 
+function rewriteParagraphTextSafe(
+  paragraphXml,
+  newText
+) {
+
+  const result =
+    replaceParagraphText(
+      paragraphXml,
+      newText
+    );
+
+  return result.changed
+    ? result.xml
+    : paragraphXml;
+}
+
 
 // =======================================================
-// CREATE OUTPUT DOCX
+// CREATE CUSTOMIZED DOCX
 // =======================================================
 
 async function createCustomizedCV(
@@ -1297,101 +1317,118 @@ async function createCustomizedCV(
     updatedXml
   );
 
-  const outputBuffer =
-    await zip.generateAsync({
-      type:
-        'nodebuffer',
+  return await zip.generateAsync({
+    type:
+      'nodebuffer',
 
-      compression:
-        'DEFLATE'
-    });
-
-  return outputBuffer;
+    compression:
+      'DEFLATE'
+  });
 }
 
 
 // =======================================================
-// SAVE OUTPUT
+// UPLOAD CUSTOMIZED DOCX
+// =======================================================
+//
+// We intentionally do NOT use InputFile.
+// Instead we use the Appwrite Storage REST API.
+//
+// This avoids the InputFile import problem in the current
+// node-appwrite environment.
+//
 // =======================================================
 
-async function saveOutput(
-  storage,
+async function uploadFileToAppwrite(
+  endpoint,
+  projectId,
+  apiKey,
   outputBuffer,
-  job
+  filename
 ) {
 
-  const safeCompany =
-    String(
-      job.company_name ||
-      'Company'
-    )
-      .replace(
-        /[^a-zA-Z0-9]+/g,
-        '_'
-      )
-      .replace(
-        /^_+|_+$/g,
-        ''
-      )
-      .slice(
-        0,
-        50
-      );
+  const form =
+    new FormData();
 
-  const safeTitle =
-    String(
-      job.job_title ||
-      'Role'
-    )
-      .replace(
-        /[^a-zA-Z0-9]+/g,
-        '_'
-      )
-      .replace(
-        /^_+|_+$/g,
-        ''
-      )
-      .slice(
-        0,
-        60
-      );
+  form.append(
+    'fileId',
+    ID.unique()
+  );
 
-  const date =
-    new Date()
-      .toISOString()
-      .slice(
-        0,
-        10
-      );
-
-  const filename =
-    `CV_${safeCompany}_${safeTitle}_${date}.docx`;
-
-  const file =
-    await storage.createFile({
-
-      bucketId:
-        RESUME_BUCKET_ID,
-
-      fileId:
-        ID.unique(),
-
-      file:
-        InputFile.fromBuffer(
-          new Blob([
-            outputBuffer
-          ]),
-          filename
-        ),
-
-      folder:
-        'customized'
-    });
-
-  return {
-    file,
+  form.append(
+    'file',
+    new Blob(
+      [
+        outputBuffer
+      ],
+      {
+        type:
+          'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+      }
+    ),
     filename
-  };
+  );
+
+  form.append(
+    'folder',
+    'customized'
+  );
+
+  const url =
+    `${endpoint}/storage/buckets/${encodeURIComponent(
+      RESUME_BUCKET_ID
+    )}/files`;
+
+  const response =
+    await fetch(
+      url,
+      {
+        method:
+          'POST',
+
+        headers: {
+          'X-Appwrite-Project':
+            projectId,
+
+          'X-Appwrite-Key':
+            apiKey,
+
+          'X-Appwrite-Response-Format':
+            '2.3.0'
+        },
+
+        body:
+          form
+      }
+    );
+
+  const responseText =
+    await response.text();
+
+  if (!response.ok) {
+
+    throw new Error(
+      `Appwrite file upload ${response.status}: ${responseText.slice(0, 500)}`
+    );
+  }
+
+  let file;
+
+  try {
+
+    file =
+      JSON.parse(
+        responseText
+      );
+
+  } catch {
+
+    throw new Error(
+      'Appwrite file upload returned invalid JSON.'
+    );
+  }
+
+  return file;
 }
 
 
@@ -1408,6 +1445,10 @@ export default async ({
 
   try {
 
+    // ---------------------------------------------------
+    // ENVIRONMENT
+    // ---------------------------------------------------
+
     const appwriteKey =
       process.env
         .JOB_AUTOMATION_API_KEY;
@@ -1416,27 +1457,53 @@ export default async ({
       process.env
         .GEMINI_API_KEY;
 
+    const endpoint =
+      process.env
+        .APPWRITE_FUNCTION_API_ENDPOINT;
+
+    const projectId =
+      process.env
+        .APPWRITE_FUNCTION_PROJECT_ID;
+
     if (!appwriteKey) {
+
       throw new Error(
         'JOB_AUTOMATION_API_KEY is missing.'
       );
     }
 
     if (!geminiKey) {
+
       throw new Error(
         'GEMINI_API_KEY is missing.'
       );
     }
 
+    if (!endpoint) {
+
+      throw new Error(
+        'APPWRITE_FUNCTION_API_ENDPOINT is missing.'
+      );
+    }
+
+    if (!projectId) {
+
+      throw new Error(
+        'APPWRITE_FUNCTION_PROJECT_ID is missing.'
+      );
+    }
+
+    // ---------------------------------------------------
+    // APPWRITE CLIENTS
+    // ---------------------------------------------------
+
     const client =
       new Client()
         .setEndpoint(
-          process.env
-            .APPWRITE_FUNCTION_API_ENDPOINT
+          endpoint
         )
         .setProject(
-          process.env
-            .APPWRITE_FUNCTION_PROJECT_ID
+          projectId
         )
         .setKey(
           appwriteKey
@@ -1452,9 +1519,9 @@ export default async ({
         client
       );
 
-    // ===================================================
-    // SELECT JOB
-    // ===================================================
+    // ---------------------------------------------------
+    // INPUT
+    // ---------------------------------------------------
 
     let input = {};
 
@@ -1478,8 +1545,13 @@ export default async ({
       }
 
     } catch {
+
       input = {};
     }
+
+    // ---------------------------------------------------
+    // TARGET JOB
+    // ---------------------------------------------------
 
     let job;
 
@@ -1487,7 +1559,7 @@ export default async ({
       input.jobId
     ) {
 
-      const response =
+      job =
         await tablesDB.getRow({
           databaseId:
             DATABASE_ID,
@@ -1501,8 +1573,6 @@ export default async ({
             )
         });
 
-      job = response;
-
     } else {
 
       job =
@@ -1511,9 +1581,9 @@ export default async ({
         );
     }
 
-    // ===================================================
+    // ---------------------------------------------------
     // MASTER CV
-    // ===================================================
+    // ---------------------------------------------------
 
     const masterFile =
       await findMasterFile(
@@ -1526,9 +1596,9 @@ export default async ({
         masterFile.$id
       );
 
-    // ===================================================
-    // READ MASTER XML
-    // ===================================================
+    // ---------------------------------------------------
+    // READ MASTER TEXT
+    // ---------------------------------------------------
 
     const {
       xml
@@ -1550,9 +1620,9 @@ export default async ({
           )
       );
 
-    // ===================================================
-    // GEMINI PLAN
-    // ===================================================
+    // ---------------------------------------------------
+    // GEMINI
+    // ---------------------------------------------------
 
     const prompt =
       buildPrompt(
@@ -1571,9 +1641,9 @@ export default async ({
         rawPlan
       );
 
-    // ===================================================
+    // ---------------------------------------------------
     // CREATE CUSTOMIZED CV
-    // ===================================================
+    // ---------------------------------------------------
 
     const outputBuffer =
       await createCustomizedCV(
@@ -1581,20 +1651,73 @@ export default async ({
         plan
       );
 
-    // ===================================================
-    // SAVE
-    // ===================================================
+    // ---------------------------------------------------
+    // FILE NAME
+    // ---------------------------------------------------
 
-    const output =
-      await saveOutput(
-        storage,
+    const safeCompany =
+      String(
+        job.company_name ||
+        'Company'
+      )
+        .replace(
+          /[^a-zA-Z0-9]+/g,
+          '_'
+        )
+        .replace(
+          /^_+|_+$/g,
+          ''
+        )
+        .slice(
+          0,
+          50
+        );
+
+    const safeTitle =
+      String(
+        job.job_title ||
+        'Role'
+      )
+        .replace(
+          /[^a-zA-Z0-9]+/g,
+          '_'
+        )
+        .replace(
+          /^_+|_+$/g,
+          ''
+        )
+        .slice(
+          0,
+          60
+        );
+
+    const date =
+      new Date()
+        .toISOString()
+        .slice(
+          0,
+          10
+        );
+
+    const filename =
+      `CV_${safeCompany}_${safeTitle}_${date}.docx`;
+
+    // ---------------------------------------------------
+    // SAVE
+    // ---------------------------------------------------
+
+    const outputFile =
+      await uploadFileToAppwrite(
+        endpoint,
+        projectId,
+        appwriteKey,
         outputBuffer,
-        job
+        filename
       );
 
-    // ===================================================
+    // ---------------------------------------------------
     // RESULT
-    // ===================================================
+    // ---------------------------------------------------
 
     return res.json({
 
@@ -1646,10 +1769,10 @@ export default async ({
       output: {
 
         fileId:
-          output.file.$id,
+          outputFile.$id,
 
         fileName:
-          output.filename,
+          filename,
 
         bucketId:
           RESUME_BUCKET_ID
@@ -1657,9 +1780,7 @@ export default async ({
 
     });
 
-  } catch (
-    err
-  ) {
+  } catch (err) {
 
     error(
       `Resume customization failed: ${err.message}`
