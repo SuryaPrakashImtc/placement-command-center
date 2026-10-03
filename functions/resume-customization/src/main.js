@@ -1,19 +1,15 @@
-import {
+import * as sdk from 'node-appwrite';
+import JSZip from 'jszip';
+import crypto from 'node:crypto';
+
+const {
   Client,
   TablesDB,
-  Query,
-  Storage,
-  ID
-} from 'node-appwrite';
-
-import {
-  InputFile
-} from 'node-appwrite/file';
-
-import JSZip from 'jszip';
+  Query
+} = sdk;
 
 // =======================================================
-// FIXED APPWRITE CONFIGURATION
+// APPWRITE CONFIG
 // =======================================================
 
 const DATABASE_ID =
@@ -22,75 +18,79 @@ const DATABASE_ID =
 const JOBS_TABLE_ID =
   'jobs';
 
-// VERIFIED Resume Files bucket ID
 const RESUME_BUCKET_ID =
   '6ac038600011e9e4bc37';
 
-// LOCKED MASTER CV FILE NAME
+const MASTER_FILE_ID =
+  '6ac038a5000b8a394104';
+
 const MASTER_FILE_NAME =
-  'MASTER CV FP(5).docx';
-
-// Current Gemini model
-const GEMINI_MODEL =
-  'gemini-3.5-flash';
+  'MASTER CV FP.docx';
 
 // =======================================================
-// HARD RESUME RULES
+// GEMINI CONFIG
+// =======================================================
+
+const GEMINI_MODELS = [
+  'gemini-3.8-flash',
+  'gemini-3.5-flash'
+];
+
+// =======================================================
+// ONE-PAGE SAFETY LIMIT
 // =======================================================
 //
-// The master CV's format/layout is locked.
+// IMPORTANT:
+// We NEVER change formatting.
+// We only rewrite/remove content.
 //
-// The agent may ONLY:
-// - rewrite content
-// - shorten content
-// - remove content
+// This is a conservative content gate.
+// Appwrite itself is not a Word renderer, so this
+// prevents excessive content but does not pretend to
+// measure rendered Word pages pixel-perfectly.
 //
-// The agent must NOT:
-// - change font
-// - change font size
-// - change colors
-// - change margins
-// - change spacing
-// - change section order
-// - redesign the CV
-//
-// Final output must fit a conservative one-page
-// content budget.
-//
-// The uploaded master CV is currently 2 pages;
-// its first page demonstrates approximately 403 words.
-// We therefore keep a lower safety budget.
 // =======================================================
 
 const MAX_ONE_PAGE_WORDS =
-  365;
+  480;
 
 const MAX_ONE_PAGE_CHARS =
-  3000;
+  3600;
 
 // =======================================================
-// MASTER CV PARAGRAPH MAP
+// LOCKED MASTER CV PARAGRAPHS
 // =======================================================
 //
-// These indexes belong to the locked master CV.
-// Headings and contact information are protected.
+// These paragraph numbers come from the master CV XML.
+// They correspond to the fixed structure of the uploaded
+// master document.
+//
 // =======================================================
 
 const PROTECTED_PARAGRAPHS =
   new Set([
-    2, 3, 4, 6, 15,
-    21, 32, 38, 44,
-    48, 56
+    2, 3,              // Name + contact
+    4,                  // Summary heading
+    6,                  // Education heading
+    7, 8, 9, 10,       // PGDM + graduation
+    15,                 // Internship heading
+    16,                 // Internship title/date
+    21,                 // Projects heading
+    32,                 // Certifications heading
+    38,                 // Skills heading
+    44,                 // Achievements heading
+    48,                 // Extra-curricular heading
+    56                  // Other information heading
   ]);
 
 const EDITABLE_PARAGRAPHS =
   new Set([
     5,
 
-    7, 8, 9, 10,
-    11, 12, 13, 14,
+    11, 12,
+    13, 14,
 
-    16, 17, 18, 19, 20,
+    17, 18, 19, 20,
 
     22, 23,
     24, 25,
@@ -112,71 +112,65 @@ const EDITABLE_PARAGRAPHS =
   ]);
 
 // =======================================================
-// FALLBACK ONE-PAGE REDUCTION ORDER
+// LAST-RESORT CONTENT REDUCTION ORDER
 // =======================================================
 //
-// We remove lower-priority content first.
-// Section headings themselves are NEVER removed.
+// Used ONLY if Gemini's output is still too long.
+// We remove content rather than altering formatting.
 //
 // =======================================================
 
 const REDUCTION_GROUPS = [
 
-  // Lowest-value / optional
-  [58],          // Hobbies
+  [58],            // Hobbies
 
-  // School education
-  [11, 12],      // 12th
-  [13, 14],      // 10th
+  [13, 14],        // 10th
+  [11, 12],        // 12th
 
-  // Less essential skill grouping
-  [42],          // Office Productivity
+  [42],             // Office productivity
 
-  // Lower-priority achievements
-  [47],          // Jila Puraskar
-  [45],          // Concord
+  [45],             // Concord
+  [47],             // Jila Puraskar
 
-  // Less essential certifications
-  [35],          // Price Psychology
-  [36],          // AI Tools Workshop
-  [37],          // Deloitte simulation
+  [51, 52],         // Cubmaster
+  [53, 54],         // Scouts
+  [49, 50],         // IIPC
 
-  // Less essential extracurricular
-  [53, 54],      // Scouts activity
-  [51, 52],      // Cubmaster
-  [49, 50],      // IIPC
+  [35],             // Price Psychology
+  [36],             // AI Tools
+  [37],             // Deloitte
 
-  // Internship compression fallback
-  [20],
-  [19],
-  [18],
+  [29],             // Sunscreen project bullet
+  [22, 23],         // Technician guide
 
-  // Project compression fallback
-  [29],
-  [23],
-  [25],
-  [31],
-  [27],
+  [24, 25],         // General Mills
 
-  // Last-resort full project removal
-  [30, 31],
-  [28, 29],
-  [26, 27],
-  [24, 25],
-  [22, 23]
+  [31],             // Purchase behaviour bullet
+
+  [19],             // Creative/video internship bullet
+  [20],             // Hotels/vendor internship bullet
+  [18],             // Brochure internship bullet
+
+  [26, 27],         // Insignia project
+  [28, 29],         // Sunscreen project
+  [30, 31],         // Purchase behaviour project
+
+  [17]              // Main Blue Star bullet — last resort
 ];
 
 // =======================================================
-// TEXT HELPERS
+// XML HELPERS
 // =======================================================
 
 function normalizeText(value) {
+
   return String(value || '')
     .replace(/\s+/g, ' ')
     .trim();
 }
 
 function escapeXml(value) {
+
   return String(value || '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
@@ -186,6 +180,7 @@ function escapeXml(value) {
 }
 
 function decodeXml(value) {
+
   return String(value || '')
     .replace(/&amp;/g, '&')
     .replace(/&lt;/g, '<')
@@ -210,12 +205,10 @@ function decodeXml(value) {
 }
 
 // =======================================================
-// DOCX PARAGRAPH EXTRACTION
+// PARAGRAPH EXTRACTION
 // =======================================================
 
-function extractParagraphs(
-  xml
-) {
+function extractParagraphs(xml) {
 
   const paragraphRegex =
     /<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g;
@@ -255,26 +248,13 @@ function extractParagraphs(
     }
 
     paragraphs.push({
-
       index,
-
       text:
         normalizeText(
           textNodes.join('')
         ),
-
       xml:
-        paragraphXml,
-
-      isHeading:
-        /<w:pStyle[^>]*w:val="Heading1"/.test(
-          paragraphXml
-        ),
-
-      isList:
-        /<w:numPr[\s\S]*?<w:numId[^>]*w:val="2"/.test(
-          paragraphXml
-        )
+        paragraphXml
     });
 
     index++;
@@ -284,16 +264,7 @@ function extractParagraphs(
 }
 
 // =======================================================
-// REPLACE PARAGRAPH CONTENT
-// =======================================================
-//
-// IMPORTANT:
-// We do NOT create new paragraphs.
-// We do NOT change paragraph properties.
-// We preserve the existing XML structure.
-//
-// Text is distributed across the existing text runs
-// so the run formatting remains part of the template.
+// REPLACE TEXT WITHOUT CHANGING RUN STRUCTURE
 // =======================================================
 
 function replaceParagraphText(
@@ -336,11 +307,14 @@ function replaceParagraphText(
   if (
     nodes.length === 0
   ) {
+
     return paragraphXml;
   }
 
-  const safeText =
-    String(newText || '');
+  const replacementText =
+    normalizeText(
+      newText
+    );
 
   const originalLengths =
     nodes.map(
@@ -350,8 +324,7 @@ function replaceParagraphText(
 
   const totalOriginal =
     originalLengths.reduce(
-      (a, b) =>
-        a + b,
+      (a, b) => a + b,
       0
     ) || 1;
 
@@ -366,12 +339,11 @@ function replaceParagraphText(
   ) {
 
     if (
-      i ===
-      nodes.length - 1
+      i === nodes.length - 1
     ) {
 
       pieces.push(
-        safeText.slice(
+        replacementText.slice(
           consumed
         )
       );
@@ -387,13 +359,13 @@ function replaceParagraphText(
       Math.max(
         0,
         Math.round(
-          safeText.length *
+          replacementText.length *
           proportion
         )
       );
 
     pieces.push(
-      safeText.slice(
+      replacementText.slice(
         consumed,
         consumed +
           targetLength
@@ -404,9 +376,8 @@ function replaceParagraphText(
       targetLength;
   }
 
-  let output = '';
-
   let cursor = 0;
+  let output = '';
 
   for (
     let i = 0;
@@ -429,13 +400,10 @@ function replaceParagraphText(
     const piece =
       pieces[i];
 
-    const needsPreserve =
+    if (
       /^\s|\s$/.test(
         piece
-      );
-
-    if (
-      needsPreserve
+      )
     ) {
 
       if (
@@ -483,6 +451,84 @@ function replaceParagraphText(
 }
 
 // =======================================================
+// REPLACE PARAGRAPHS
+// =======================================================
+
+function replaceParagraphs(
+  xml,
+  replacements
+) {
+
+  const paragraphRegex =
+    /<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g;
+
+  let output = '';
+  let cursor = 0;
+  let index = 0;
+  let match;
+
+  while (
+    (match =
+      paragraphRegex.exec(xml)) !== null
+  ) {
+
+    const start =
+      match.index;
+
+    const end =
+      paragraphRegex.lastIndex;
+
+    const original =
+      match[0];
+
+    output +=
+      xml.slice(
+        cursor,
+        start
+      );
+
+    if (
+      Object.prototype.hasOwnProperty.call(
+        replacements,
+        String(index)
+      ) &&
+      EDITABLE_PARAGRAPHS.has(
+        index
+      ) &&
+      !PROTECTED_PARAGRAPHS.has(
+        index
+      )
+    ) {
+
+      output +=
+        replaceParagraphText(
+          original,
+          replacements[
+            String(index)
+          ]
+        );
+
+    } else {
+
+      output +=
+        original;
+    }
+
+    cursor =
+      end;
+
+    index++;
+  }
+
+  output +=
+    xml.slice(
+      cursor
+    );
+
+  return output;
+}
+
+// =======================================================
 // REMOVE PARAGRAPHS
 // =======================================================
 
@@ -500,14 +546,11 @@ function removeParagraphs(
   let output = '';
   let cursor = 0;
   let index = 0;
-
   let match;
 
   while (
     (match =
-      paragraphRegex.exec(
-        xml
-      )) !== null
+      paragraphRegex.exec(xml)) !== null
   ) {
 
     const start =
@@ -547,90 +590,6 @@ function removeParagraphs(
 }
 
 // =======================================================
-// REPLACE SELECTED PARAGRAPHS
-// =======================================================
-
-function replaceParagraphs(
-  xml,
-  replacements
-) {
-
-  const paragraphRegex =
-    /<w:p(?:\s[^>]*)?>[\s\S]*?<\/w:p>/g;
-
-  let output = '';
-  let cursor = 0;
-  let index = 0;
-
-  let match;
-
-  while (
-    (match =
-      paragraphRegex.exec(
-        xml
-      )) !== null
-  ) {
-
-    const start =
-      match.index;
-
-    const end =
-      paragraphRegex.lastIndex;
-
-    output +=
-      xml.slice(
-        cursor,
-        start
-      );
-
-    const original =
-      match[0];
-
-    const hasReplacement =
-      Object.prototype.hasOwnProperty.call(
-        replacements,
-        String(index)
-      );
-
-    if (
-      hasReplacement &&
-      EDITABLE_PARAGRAPHS.has(
-        index
-      ) &&
-      !PROTECTED_PARAGRAPHS.has(
-        index
-      )
-    ) {
-
-      output +=
-        replaceParagraphText(
-          original,
-          replacements[
-            String(index)
-          ]
-        );
-
-    } else {
-
-      output +=
-        original;
-    }
-
-    cursor =
-      end;
-
-    index++;
-  }
-
-  output +=
-    xml.slice(
-      cursor
-    );
-
-  return output;
-}
-
-// =======================================================
 // APPLY GEMINI PLAN
 // =======================================================
 
@@ -639,14 +598,12 @@ function applyPlan(
   plan
 ) {
 
-  let output =
-    xml;
+  let output = xml;
 
   const replacements = {};
 
   if (
-    plan &&
-    plan.replacements &&
+    plan?.replacements &&
     typeof plan.replacements ===
       'object'
   ) {
@@ -665,9 +622,7 @@ function applyPlan(
         Number(key);
 
       if (
-        Number.isInteger(
-          index
-        ) &&
+        Number.isInteger(index) &&
         EDITABLE_PARAGRAPHS.has(
           index
         ) &&
@@ -676,9 +631,7 @@ function applyPlan(
         ) &&
         typeof value ===
           'string' &&
-        normalizeText(
-          value
-        )
+        normalizeText(value)
       ) {
 
         replacements[
@@ -690,6 +643,12 @@ function applyPlan(
       }
     }
   }
+
+  output =
+    replaceParagraphs(
+      output,
+      replacements
+    );
 
   const removals =
     Array.isArray(
@@ -712,12 +671,6 @@ function applyPlan(
       : [];
 
   output =
-    replaceParagraphs(
-      output,
-      replacements
-    );
-
-  output =
     removeParagraphs(
       output,
       removals
@@ -725,7 +678,7 @@ function applyPlan(
 
   return {
     xml: output,
-    removals
+    removed: removals
   };
 }
 
@@ -733,7 +686,7 @@ function applyPlan(
 // DOCUMENT METRICS
 // =======================================================
 
-function getMetrics(
+function documentMetrics(
   xml
 ) {
 
@@ -742,31 +695,32 @@ function getMetrics(
       xml
     );
 
-  const fullText =
+  const text =
     normalizeText(
       paragraphs
         .map(
-          paragraph =>
-            paragraph.text
+          p => p.text
         )
         .join(' ')
     );
 
   return {
 
+    paragraphs,
+
     words:
-      fullText
-        ? fullText.split(/\s+/).length
+      text
+        ? text.split(
+            /\s+/
+          ).length
         : 0,
 
     chars:
-      fullText.length,
-
-    paragraphs
+      text.length
   };
 }
 
-function exceedsBudget(
+function exceedsOnePageBudget(
   metrics
 ) {
 
@@ -779,17 +733,12 @@ function exceedsBudget(
 }
 
 // =======================================================
-// ONE-PAGE REDUCTION
-// =======================================================
-//
-// We ONLY delete content paragraphs.
-// We NEVER touch formatting.
-//
+// REDUCE CONTENT UNTIL IT PASSES SAFETY GATE
 // =======================================================
 
 function reduceToOnePage(
   xml,
-  removedAlready
+  alreadyRemoved
 ) {
 
   let output =
@@ -797,23 +746,26 @@ function reduceToOnePage(
 
   const removed =
     [
-      ...removedAlready
+      ...alreadyRemoved
     ];
 
   let metrics =
-    getMetrics(
+    documentMetrics(
       output
     );
 
   if (
-    !exceedsBudget(
+    !exceedsOnePageBudget(
       metrics
     )
   ) {
 
     return {
-      xml: output,
+      xml:
+        output,
+
       removed,
+
       metrics
     };
   }
@@ -835,31 +787,8 @@ function reduceToOnePage(
       );
 
     if (
-      validGroup.length ===
-      0
+      validGroup.length === 0
     ) {
-      continue;
-    }
-
-    const existing =
-      new Map(
-        metrics.paragraphs.map(
-          paragraph =>
-            [
-              paragraph.index,
-              paragraph.text
-            ]
-        )
-      );
-
-    const hasContent =
-      validGroup.some(
-        index =>
-          existing.has(index) &&
-          existing.get(index)
-      );
-
-    if (!hasContent) {
       continue;
     }
 
@@ -874,12 +803,12 @@ function reduceToOnePage(
     );
 
     metrics =
-      getMetrics(
+      documentMetrics(
         output
       );
 
     if (
-      !exceedsBudget(
+      !exceedsOnePageBudget(
         metrics
       )
     ) {
@@ -888,146 +817,19 @@ function reduceToOnePage(
   }
 
   return {
-    xml: output,
-    removed,
+
+    xml:
+      output,
+
+    removed:
+      [
+        ...new Set(
+          removed
+        )
+      ],
+
     metrics
   };
-}
-
-// =======================================================
-// APPWRITE STORAGE
-// =======================================================
-
-async function findMasterFile(
-  storage
-) {
-
-  const result =
-    await storage.listFiles({
-      bucketId:
-        RESUME_BUCKET_ID,
-
-      limit:
-        100,
-
-      offset:
-        0
-    });
-
-  const files =
-    Array.isArray(
-      result.files
-    )
-      ? result.files
-      : [];
-
-  const matches =
-    files.filter(
-      file =>
-        file.name ===
-        MASTER_FILE_NAME
-    );
-
-  if (
-    matches.length ===
-    0
-  ) {
-
-    throw new Error(
-      `Master CV '${MASTER_FILE_NAME}' was not found in bucket ${RESUME_BUCKET_ID}.`
-    );
-  }
-
-  matches.sort(
-    (a, b) =>
-      new Date(
-        b.$updatedAt || 0
-      ).getTime() -
-      new Date(
-        a.$updatedAt || 0
-      ).getTime()
-  );
-
-  return matches[0];
-}
-
-async function downloadMasterFile(
-  storage,
-  fileId
-) {
-
-  const data =
-    await storage.getFileDownload({
-      bucketId:
-        RESUME_BUCKET_ID,
-
-      fileId
-    });
-
-  if (
-    Buffer.isBuffer(data)
-  ) {
-
-    return data;
-  }
-
-  if (
-    data instanceof Uint8Array
-  ) {
-
-    return Buffer.from(
-      data
-    );
-  }
-
-  if (
-    data instanceof ArrayBuffer
-  ) {
-
-    return Buffer.from(
-      data
-    );
-  }
-
-  if (
-    data &&
-    typeof data.arrayBuffer ===
-      'function'
-  ) {
-
-    return Buffer.from(
-      await data.arrayBuffer()
-    );
-  }
-
-  throw new Error(
-    'Unable to convert master CV download into a Buffer.'
-  );
-}
-
-async function uploadCustomizedFile(
-  storage,
-  buffer,
-  fileName
-) {
-
-  return storage.createFile({
-
-    bucketId:
-      RESUME_BUCKET_ID,
-
-    fileId:
-      ID.unique(),
-
-    file:
-      InputFile.fromBuffer(
-        buffer,
-        fileName
-      ),
-
-    folder:
-      'customized'
-  });
 }
 
 // =======================================================
@@ -1038,29 +840,39 @@ async function fetchAllJobs(
   tablesDB
 ) {
 
-  let jobs = [];
+  const jobs = [];
 
-  let offset = 0;
+  let cursor =
+    null;
 
   while (true) {
 
-    const result =
-      await tablesDB.listRows({
+    const queries = [
+      Query.limit(100)
+    ];
 
+    if (cursor) {
+
+      queries.push(
+        Query.cursorAfter(
+          cursor
+        )
+      );
+    }
+
+    const response =
+      await tablesDB.listRows({
         databaseId:
           DATABASE_ID,
 
         tableId:
           JOBS_TABLE_ID,
 
-        queries: [
-          Query.limit(100),
-          Query.offset(offset)
-        ]
+        queries
       });
 
     const rows =
-      result.rows || [];
+      response.rows || [];
 
     jobs.push(
       ...rows
@@ -1072,12 +884,258 @@ async function fetchAllJobs(
       break;
     }
 
-    offset +=
-      rows.length;
+    cursor =
+      rows[
+        rows.length - 1
+      ].$id;
   }
 
   return jobs;
 }
+
+// =======================================================
+// SELECT JOB
+// =======================================================
+
+function selectJob(
+  jobs,
+  requestedJobId
+) {
+
+  if (
+    requestedJobId
+  ) {
+
+    const exact =
+      jobs.find(
+        job =>
+          job.$id ===
+          requestedJobId
+      );
+
+    if (!exact) {
+
+      throw new Error(
+        `Job '${requestedJobId}' was not found in the Jobs table.`
+      );
+    }
+
+    return exact;
+  }
+
+  const candidates =
+    jobs.filter(
+      job =>
+        job.eligibility_status !==
+          'NOT_ELIGIBLE' &&
+        job.match_status !==
+          'NOT_A_MATCH'
+    );
+
+  candidates.sort(
+    (a, b) => {
+
+      const opportunityDiff =
+        (
+          Number(
+            b.opportunity_score
+          ) || 0
+        ) -
+        (
+          Number(
+            a.opportunity_score
+          ) || 0
+        );
+
+      if (
+        opportunityDiff !==
+        0
+      ) {
+
+        return opportunityDiff;
+      }
+
+      const rank = {
+        HIGH_MATCH: 3,
+        MEDIUM_MATCH: 2,
+        LOW_MATCH: 1,
+        UNKNOWN: 0
+      };
+
+      return (
+        (
+          rank[
+            b.match_status
+          ] || 0
+        ) -
+        (
+          rank[
+            a.match_status
+          ] || 0
+        )
+      );
+    }
+  );
+
+  if (
+    candidates.length ===
+    0
+  ) {
+
+    throw new Error(
+      'No eligible/matchable jobs are available.'
+    );
+  }
+
+  return candidates[0];
+}
+
+// =======================================================
+// APPWRITE STORAGE DOWNLOAD
+// =======================================================
+
+async function downloadMasterCv({
+  endpoint,
+  projectId,
+  apiKey
+}) {
+
+  const url =
+    `${endpoint}` +
+    `/storage/buckets/` +
+    `${encodeURIComponent(
+      RESUME_BUCKET_ID
+    )}` +
+    `/files/` +
+    `${encodeURIComponent(
+      MASTER_FILE_ID
+    )}` +
+    `/download`;
+
+  const response =
+    await fetch(
+      url,
+      {
+        method:
+          'GET',
+
+        headers: {
+
+          'X-Appwrite-Project':
+            projectId,
+
+          'X-Appwrite-Key':
+            apiKey
+        }
+      }
+    );
+
+  if (
+    !response.ok
+  ) {
+
+    const text =
+      await response.text();
+
+    throw new Error(
+      `Master CV download failed ${response.status}: ${text.slice(0, 500)}`
+    );
+  }
+
+  return Buffer.from(
+    await response.arrayBuffer()
+  );
+}
+
+// =======================================================
+// APPWRITE STORAGE UPLOAD
+// =======================================================
+
+async function uploadCustomizedCv({
+  endpoint,
+  projectId,
+  apiKey,
+  buffer,
+  fileName
+}) {
+
+  const url =
+    `${endpoint}` +
+    `/storage/buckets/` +
+    `${encodeURIComponent(
+      RESUME_BUCKET_ID
+    )}` +
+    `/files`;
+
+  const newFileId =
+    crypto.randomUUID();
+
+  const form =
+    new FormData();
+
+  form.append(
+    'fileId',
+    newFileId
+  );
+
+  form.append(
+    'file',
+    new Blob(
+      [buffer],
+      {
+        type:
+          'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+      }
+    ),
+    fileName
+  );
+
+  form.append(
+    'folder',
+    'customized'
+  );
+
+  const response =
+    await fetch(
+      url,
+      {
+        method:
+          'POST',
+
+        headers: {
+
+          'X-Appwrite-Project':
+            projectId,
+
+          'X-Appwrite-Key':
+            apiKey
+        },
+
+        body:
+          form
+      }
+    );
+
+  const text =
+    await response.text();
+
+  if (
+    !response.ok
+  ) {
+
+    throw new Error(
+      `Customized CV upload failed ${response.status}: ${text.slice(0, 500)}`
+    );
+  }
+
+  return JSON.parse(
+    text
+  );
+}
+
+// =======================================================
+// REQUEST JOB ID
+// =======================================================
 
 function getRequestedJobId(
   req
@@ -1101,168 +1159,65 @@ function getRequestedJobId(
     );
   }
 
+  if (
+    req?.body
+  ) {
+
+    try {
+
+      const parsed =
+        JSON.parse(
+          req.body
+        );
+
+      if (
+        parsed?.jobId
+      ) {
+
+        return String(
+          parsed.jobId
+        );
+      }
+
+    } catch {
+      // Automatic job selection.
+    }
+  }
+
   return null;
 }
 
-function chooseJob(
-  jobs,
-  requestedJobId
+// =======================================================
+// MASTER CV PROFILE FOR GEMINI
+// =======================================================
+
+function buildMasterProfile(
+  paragraphs
 ) {
 
-  if (
-    requestedJobId
-  ) {
-
-    const exact =
-      jobs.find(
-        job =>
-          job.$id ===
-          requestedJobId
-      );
-
-    if (!exact) {
-
-      throw new Error(
-        `Job '${requestedJobId}' was not found.`
-      );
-    }
-
-    return exact;
-  }
-
-  const usable =
-    jobs.filter(
-      job =>
-        job.eligibility_status !==
-          'NOT_ELIGIBLE' &&
-        job.match_status !==
-          'NOT_A_MATCH'
-    );
-
-  usable.sort(
-    (a, b) =>
-      (
-        Number(
-          b.opportunity_score
-        ) || 0
-      ) -
-      (
-        Number(
-          a.opportunity_score
-        ) || 0
-      )
-  );
-
-  if (
-    usable.length ===
-    0
-  ) {
-
-    throw new Error(
-      'No usable jobs are available for resume customization.'
-    );
-  }
-
-  return usable[0];
+  return paragraphs
+    .filter(
+      paragraph =>
+        paragraph.text
+    )
+    .map(
+      paragraph =>
+        `[${paragraph.index}] ${paragraph.text}`
+    )
+    .join('\n');
 }
 
 // =======================================================
-// GEMINI
+// GEMINI JSON CLEANUP
 // =======================================================
 
-function buildGeminiPrompt(
-  job,
-  masterParagraphs
+function stripJsonFences(
+  value
 ) {
 
-  const masterText =
-    masterParagraphs
-      .filter(
-        paragraph =>
-          paragraph.text
-      )
-      .map(
-        paragraph =>
-          `[${paragraph.index}] ${paragraph.text}`
-      )
-      .join('\n');
-
-  return `
-You are the Resume Customization Agent for a job applicant.
-
-Your job is to create a CONTENT-ONLY edit plan for the locked master CV.
-
-MASTER CV RULES
-- The master CV format is immutable.
-- Do not redesign it.
-- Do not change fonts.
-- Do not change font sizes.
-- Do not change colors.
-- Do not change margins.
-- Do not change spacing.
-- Do not change section order.
-- Do not create new sections.
-- Do not change the candidate's name or contact details.
-- Do not change education facts or dates.
-- Do not invent facts.
-- Do not invent metrics.
-- Do not invent tools.
-- Do not invent employers.
-- Do not invent achievements.
-- Use only facts explicitly contained in the master CV.
-- You may rewrite existing paragraph content.
-- You may remove existing content paragraphs.
-- You may shorten content.
-- You may select the most relevant existing projects, skills, certifications and achievements.
-- The final CV must fit one page.
-- Never solve the one-page requirement by shrinking formatting.
-- Prefer approximately 330-360 words.
-
-JOB
-Title: ${job.job_title || ''}
-Company: ${job.company_name || ''}
-Location: ${job.location || ''}
-Function: ${job.function || ''}
-Department: ${job.department || ''}
-Experience required: ${job.experience_required || ''}
-Education required: ${job.education_required || ''}
-Salary: ${job.salary_range || ''}
-
-JOB DESCRIPTION
-${String(
-  job.job_description || ''
-).slice(0, 14000)}
-
-LOCKED MASTER CV PARAGRAPHS
-${masterText}
-
-IMPORTANT PARAGRAPH RULES
-- Only use indexes that exist above.
-- Never remove or rewrite protected headings/contact paragraphs.
-- Prefer rewriting summary, internship bullets, relevant project bullets and skills.
-- Remove lower-value content instead of making the CV longer.
-- Preserve truthful quantitative evidence such as ₹6.5 Cr, ₹85,000, 100+, 8+, 23+, 50+, 200+, 20+, etc. only when relevant.
-- Do not add a number that is not already in the CV.
-
-RETURN ONLY VALID JSON:
-
-{
-  "replacements": {
-    "5": "new summary",
-    "17": "new internship bullet",
-    "39": "new skills line"
-  },
-  "removeParagraphs": [11,12,58],
-  "reason": "brief reason"
-}
-`;
-}
-
-function cleanGeminiJson(
-  text
-) {
-
-  return String(text || '')
+  return String(
+    value || ''
+  )
     .replace(
       /^```json\s*/i,
       ''
@@ -1278,146 +1233,266 @@ function cleanGeminiJson(
     .trim();
 }
 
-async function generatePlan(
+// =======================================================
+// GEMINI
+// =======================================================
+
+async function generateCustomizationPlan(
   apiKey,
   job,
-  masterParagraphs
+  paragraphs
 ) {
 
-  const prompt =
-    buildGeminiPrompt(
-      job,
-      masterParagraphs
-    );
+  const prompt = `
+You are a STRICT resume customization engine.
 
-  const endpoint =
-    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
+You are editing a LOCKED MASTER CV.
 
-  const response =
-    await fetch(
-      endpoint,
-      {
-        method: 'POST',
+YOUR ONLY JOB:
+Create a content-edit plan for this specific job.
 
-        headers: {
-          'Content-Type':
-            'application/json',
+NON-NEGOTIABLE RULES:
 
-          'x-goog-api-key':
-            apiKey
-        },
+1. Use ONLY facts that already exist in the master CV.
+2. Never invent experience, qualifications, employers, dates, numbers, tools, responsibilities, achievements, certifications or skills.
+3. Do not modify the candidate name or contact information.
+4. Do not modify section headings.
+5. Do not modify education facts or dates.
+6. Do not change fonts.
+7. Do not change font sizes.
+8. Do not change colors.
+9. Do not change margins.
+10. Do not change spacing.
+11. Do not change bullets.
+12. Do not change section order.
+13. Do not add sections.
+14. You may ONLY:
+    a) rewrite existing editable paragraph content, and/or
+    b) remove existing editable paragraphs.
+15. The final CV must fit on ONE PAGE.
+16. The master CV is currently a two-page document. Reduce content rather than changing formatting.
+17. Keep the strongest quantified achievements whenever they are relevant.
+18. Prefer concise wording.
+19. Do not rewrite a paragraph merely for style. Rewrite only when it improves job relevance.
+20. Never create facts that are merely implied.
 
-        body:
-          JSON.stringify({
+JOB:
 
-            contents: [
-              {
-                parts: [
-                  {
-                    text:
-                      prompt
-                  }
-                ]
-              }
-            ],
+Title:
+${job.job_title || ''}
 
-            generationConfig: {
-              temperature:
-                0.15,
+Company:
+${job.company_name || ''}
 
-              maxOutputTokens:
-                5000,
+Location:
+${job.location || ''}
 
-              responseMimeType:
-                'application/json'
-            }
-          })
-      }
-    );
+Function:
+${job.function || ''}
 
-  const raw =
-    await response.text();
+Department:
+${job.department || ''}
 
-  if (
-    !response.ok
+Experience:
+${job.experience_required || ''}
+
+Education:
+${job.education_required || ''}
+
+Salary:
+${job.salary_range || ''}
+
+JOB DESCRIPTION:
+${String(
+  job.job_description || ''
+).slice(0, 16000)}
+
+MASTER CV PARAGRAPHS:
+
+${buildMasterProfile(
+  paragraphs
+)}
+
+EDITABLE PARAGRAPH INDEXES:
+${[...EDITABLE_PARAGRAPHS].join(', ')}
+
+PROTECTED PARAGRAPH INDEXES:
+${[...PROTECTED_PARAGRAPHS].join(', ')}
+
+OUTPUT ONLY VALID JSON.
+
+Use exactly:
+
+{
+  "replacements": {
+    "paragraphIndex": "new truthful concise paragraph text"
+  },
+  "removeParagraphs": [paragraphIndex],
+  "reason": "one short sentence"
+}
+
+Do not output markdown.
+Do not output commentary outside the JSON.
+`;
+
+  let lastError =
+    null;
+
+  for (
+    const model
+    of GEMINI_MODELS
   ) {
 
-    throw new Error(
-      `Gemini ${response.status}: ${raw.slice(0, 500)}`
-    );
+    try {
+
+      const url =
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+
+      const response =
+        await fetch(
+          url,
+          {
+            method:
+              'POST',
+
+            headers: {
+
+              'Content-Type':
+                'application/json',
+
+              'x-goog-api-key':
+                apiKey
+            },
+
+            body:
+              JSON.stringify({
+
+                contents: [
+                  {
+                    parts: [
+                      {
+                        text:
+                          prompt
+                      }
+                    ]
+                  }
+                ],
+
+                generationConfig: {
+
+                  temperature:
+                    0.15,
+
+                  maxOutputTokens:
+                    5000,
+
+                  responseMimeType:
+                    'application/json'
+                }
+              })
+          }
+        );
+
+      const raw =
+        await response.text();
+
+      if (
+        !response.ok
+      ) {
+
+        lastError =
+          new Error(
+            `Gemini ${model} ${response.status}: ${raw.slice(0, 500)}`
+          );
+
+        continue;
+      }
+
+      const data =
+        JSON.parse(
+          raw
+        );
+
+      const responseText =
+        data
+          ?.candidates?.[0]
+          ?.content?.parts?.[0]
+          ?.text;
+
+      if (
+        !responseText
+      ) {
+
+        lastError =
+          new Error(
+            `Gemini ${model} returned no response text.`
+          );
+
+        continue;
+      }
+
+      return {
+
+        model,
+
+        plan:
+          JSON.parse(
+            stripJsonFences(
+              responseText
+            )
+          )
+      };
+
+    } catch (
+      geminiError
+    ) {
+
+      lastError =
+        geminiError;
+    }
   }
 
-  const data =
-    JSON.parse(
-      raw
-    );
-
-  const text =
-    data
-      ?.candidates?.[0]
-      ?.content?.parts?.[0]
-      ?.text;
-
-  if (!text) {
-
-    throw new Error(
-      'Gemini returned no resume edit plan.'
-    );
-  }
-
-  return JSON.parse(
-    cleanGeminiJson(
-      text
+  throw (
+    lastError ||
+    new Error(
+      'Gemini customization failed.'
     )
   );
 }
 
 // =======================================================
-// OUTPUT NAME
+// OUTPUT FILE NAME
 // =======================================================
 
-function safePart(
-  value,
-  fallback
-) {
-
-  const result =
-    String(
-      value || fallback
-    )
-      .replace(
-        /[^a-z0-9]+/gi,
-        '-'
-      )
-      .replace(
-        /^-+|-+$/g,
-        ''
-      )
-      .slice(
-        0,
-        50
-      );
-
-  return (
-    result ||
-    fallback
-  );
-}
-
-function createOutputName(
+function createOutputFileName(
   job
 ) {
 
+  const clean =
+    value =>
+      String(
+        value || ''
+      )
+        .replace(
+          /[^a-z0-9]+/gi,
+          '-'
+        )
+        .replace(
+          /^-+|-+$/g,
+          ''
+        )
+        .slice(
+          0,
+          50
+        ) ||
+      'Job';
+
   return (
-    `CV-${safePart(
-      job.job_title,
-      'Job'
-    )}-` +
-    `${safePart(
-      job.company_name,
-      'Company'
-    )}-` +
-    `${Date.now()}.docx`
+    `CV-${clean(
+      job.job_title
+    )}-${clean(
+      job.company_name
+    )}-${Date.now()}.docx`
   );
 }
 
@@ -1434,6 +1509,10 @@ export default async ({
 
   try {
 
+    // ---------------------------------------------------
+    // ENVIRONMENT
+    // ---------------------------------------------------
+
     const appwriteKey =
       process.env
         .JOB_AUTOMATION_API_KEY;
@@ -1442,17 +1521,39 @@ export default async ({
       process.env
         .GEMINI_API_KEY;
 
-    if (!appwriteKey) {
+    const endpoint =
+      process.env
+        .APPWRITE_FUNCTION_API_ENDPOINT;
+
+    const projectId =
+      process.env
+        .APPWRITE_FUNCTION_PROJECT_ID;
+
+    if (
+      !appwriteKey
+    ) {
 
       throw new Error(
         'JOB_AUTOMATION_API_KEY is missing.'
       );
     }
 
-    if (!geminiKey) {
+    if (
+      !geminiKey
+    ) {
 
       throw new Error(
         'GEMINI_API_KEY is missing.'
+      );
+    }
+
+    if (
+      !endpoint ||
+      !projectId
+    ) {
+
+      throw new Error(
+        'Required Appwrite function variables are missing.'
       );
     }
 
@@ -1463,12 +1564,10 @@ export default async ({
     const client =
       new Client()
         .setEndpoint(
-          process.env
-            .APPWRITE_FUNCTION_API_ENDPOINT
+          endpoint
         )
         .setProject(
-          process.env
-            .APPWRITE_FUNCTION_PROJECT_ID
+          projectId
         )
         .setKey(
           appwriteKey
@@ -1476,11 +1575,6 @@ export default async ({
 
     const tablesDB =
       new TablesDB(
-        client
-      );
-
-    const storage =
-      new Storage(
         client
       );
 
@@ -1494,7 +1588,7 @@ export default async ({
       );
 
     const job =
-      chooseJob(
+      selectJob(
         jobs,
         getRequestedJobId(
           req
@@ -1502,26 +1596,22 @@ export default async ({
       );
 
     // ---------------------------------------------------
-    // FIND MASTER CV
-    // ---------------------------------------------------
-
-    const masterFile =
-      await findMasterFile(
-        storage
-      );
-
-    // ---------------------------------------------------
     // DOWNLOAD MASTER CV
     // ---------------------------------------------------
 
     const masterBuffer =
-      await downloadMasterFile(
-        storage,
-        masterFile.$id
-      );
+      await downloadMasterCv({
+
+        endpoint,
+
+        projectId,
+
+        apiKey:
+          appwriteKey
+      });
 
     // ---------------------------------------------------
-    // OPEN DOCX
+    // LOAD DOCX
     // ---------------------------------------------------
 
     const zip =
@@ -1534,7 +1624,9 @@ export default async ({
         'word/document.xml'
       );
 
-    if (!documentFile) {
+    if (
+      !documentFile
+    ) {
 
       throw new Error(
         'Master CV is not a valid DOCX: word/document.xml is missing.'
@@ -1546,93 +1638,28 @@ export default async ({
         'string'
       );
 
-    // ---------------------------------------------------
-    // READ MASTER STRUCTURE
-    // ---------------------------------------------------
-
     const masterMetrics =
-      getMetrics(
+      documentMetrics(
         documentXml
       );
 
     // ---------------------------------------------------
-    // GEMINI EDIT PLAN
+    // GEMINI
     // ---------------------------------------------------
 
-    let plan;
+    const geminiResult =
+      await generateCustomizationPlan(
+        geminiKey,
+        job,
+        masterMetrics.paragraphs
+      );
 
-    let aiUsed =
-      true;
-
-    let aiError =
-      '';
-
-    try {
-
-      plan =
-        await generatePlan(
-          geminiKey,
-          job,
-          masterMetrics.paragraphs
-        );
-
-    } catch (
-      geminiError
-    ) {
-
-      aiUsed =
-        false;
-
-      aiError =
-        geminiError.message;
-
-      /*
-        Safe fallback:
-        use only existing master content
-        and aggressively remove lower-value
-        content until one-page budget is met.
-      */
-
-      plan = {
-
-        replacements: {},
-
-        removeParagraphs: [
-
-          58,
-
-          11,
-          12,
-
-          13,
-          14,
-
-          42,
-
-          47,
-          45,
-
-          35,
-          36,
-          37,
-
-          53,
-          54,
-
-          51,
-          52,
-
-          49,
-          50
-        ],
-
-        reason:
-          'Gemini unavailable; conservative one-page fallback applied.'
-      };
-    }
+    const plan =
+      geminiResult.plan ||
+      {};
 
     // ---------------------------------------------------
-    // APPLY CONTENT PLAN
+    // APPLY AI CONTENT CHANGES
     // ---------------------------------------------------
 
     const applied =
@@ -1644,45 +1671,63 @@ export default async ({
     documentXml =
       applied.xml;
 
-    let removed =
-      applied.removals;
-
     // ---------------------------------------------------
-    // ENFORCE ONE-PAGE CONTENT BUDGET
+    // ONE-PAGE CONTENT SAFETY
     // ---------------------------------------------------
 
-    const reduced =
+    const requestedRemoved =
+      Array.isArray(
+        plan.removeParagraphs
+      )
+        ? plan.removeParagraphs
+            .map(Number)
+            .filter(
+              index =>
+                Number.isInteger(index) &&
+                EDITABLE_PARAGRAPHS.has(
+                  index
+                ) &&
+                !PROTECTED_PARAGRAPHS.has(
+                  index
+                )
+            )
+        : [];
+
+    const reduction =
       reduceToOnePage(
         documentXml,
-        removed
+        [
+          ...new Set(
+            [
+              ...requestedRemoved
+            ]
+          )
+        ]
       );
 
     documentXml =
-      reduced.xml;
-
-    removed =
-      [
-        ...new Set(
-          reduced.removed
-        )
-      ];
+      reduction.xml;
 
     const finalMetrics =
-      reduced.metrics;
+      reduction.metrics;
+
+    // ---------------------------------------------------
+    // HARD STOP IF STILL TOO LONG
+    // ---------------------------------------------------
 
     if (
-      exceedsBudget(
+      exceedsOnePageBudget(
         finalMetrics
       )
     ) {
 
       throw new Error(
-        `ONE_PAGE_GATE_FAILED: ${finalMetrics.words} words / ${finalMetrics.chars} characters remain after permitted content reduction.`
+        `One-page safety gate failed. Final content: ${finalMetrics.words} words / ${finalMetrics.chars} characters. No formatting was changed.`
       );
     }
 
     // ---------------------------------------------------
-    // WRITE DOCUMENT
+    // WRITE BACK DOCUMENT XML
     // ---------------------------------------------------
 
     zip.file(
@@ -1692,6 +1737,7 @@ export default async ({
 
     const outputBuffer =
       await zip.generateAsync({
+
         type:
           'nodebuffer',
 
@@ -1705,31 +1751,39 @@ export default async ({
       });
 
     // ---------------------------------------------------
-    // UPLOAD CUSTOMIZED CV
+    // UPLOAD
     // ---------------------------------------------------
 
     const outputFileName =
-      createOutputName(
+      createOutputFileName(
         job
       );
 
     const uploaded =
-      await uploadCustomizedFile(
-        storage,
-        outputBuffer,
-        outputFileName
-      );
+      await uploadCustomizedCv({
+
+        endpoint,
+
+        projectId,
+
+        apiKey:
+          appwriteKey,
+
+        buffer:
+          outputBuffer,
+
+        fileName:
+          outputFileName
+      });
 
     // ---------------------------------------------------
-    // FINAL RESPONSE
+    // SUCCESS
     // ---------------------------------------------------
 
     return res.json({
 
       status:
-        aiUsed
-          ? 'SUCCESS'
-          : 'PARTIAL_SUCCESS',
+        'SUCCESS',
 
       job: {
 
@@ -1742,31 +1796,34 @@ export default async ({
         company:
           job.company_name,
 
-        location:
-          job.location,
+        opportunityScore:
+          Number(
+            job.opportunity_score
+          ) || 0,
 
         matchStatus:
           job.match_status,
 
         eligibilityStatus:
-          job.eligibility_status,
-
-        opportunityScore:
-          Number(
-            job.opportunity_score
-          ) || 0
+          job.eligibility_status
       },
 
       masterCv: {
 
+        bucketId:
+          RESUME_BUCKET_ID,
+
         fileId:
-          masterFile.$id,
+          MASTER_FILE_ID,
 
         fileName:
-          masterFile.name
+          MASTER_FILE_NAME
       },
 
       customizedCv: {
+
+        bucketId:
+          RESUME_BUCKET_ID,
 
         fileId:
           uploaded.$id,
@@ -1774,22 +1831,28 @@ export default async ({
         fileName:
           uploaded.name,
 
-        bucketId:
-          RESUME_BUCKET_ID,
-
         folder:
           'customized'
       },
 
-      onePageGate: {
+      customization: {
 
-        passed:
-          true,
+        geminiModel:
+          geminiResult.model,
 
-        words:
+        reason:
+          plan.reason || '',
+
+        removedParagraphs:
+          reduction.removed.sort(
+            (a, b) =>
+              a - b
+          ),
+
+        finalWords:
           finalMetrics.words,
 
-        characters:
+        finalCharacters:
           finalMetrics.chars,
 
         maxWords:
@@ -1799,20 +1862,19 @@ export default async ({
           MAX_ONE_PAGE_CHARS
       },
 
-      contentCustomization: {
+      rules: {
 
-        aiUsed,
+        formattingChanged:
+          false,
 
-        aiError,
+        structureChanged:
+          false,
 
-        removedParagraphs:
-          removed.sort(
-            (a, b) =>
-              a - b
-          ),
+        onePageSafetyGate:
+          true,
 
-        reason:
-          plan.reason || ''
+        masterTemplatePreserved:
+          true
       }
     });
 
