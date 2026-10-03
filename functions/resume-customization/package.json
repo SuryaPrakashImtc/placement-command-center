@@ -8,8 +8,7 @@
     "start": "node src/main.js"
   },
   "dependencies": {
-    "@xmldom/xmldom": "^0.8.11",
-    "jszip": "^3.10.1",
-    "node-appwrite": "^29.0.0"
+    "node-appwrite": "^29.0.0",
+    "jszip": "^3.10.1"
   }
 }
