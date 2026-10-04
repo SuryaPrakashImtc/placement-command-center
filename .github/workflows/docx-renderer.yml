@@ -2,11 +2,10 @@ name: DOCX Renderer
 
 on:
   workflow_dispatch:
-    inputs:
-      docx_url:
-        description: "Temporary/signed URL to the DOCX to validate"
-        required: true
-        type: string
+
+permissions:
+  id-token: write
+  contents: read
 
 jobs:
   render:
@@ -19,17 +18,31 @@ jobs:
       - name: Install LibreOffice and PDF tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y libreoffice poppler-utils
+          sudo apt-get install -y libreoffice poppler-utils jq
 
-      - name: Download DOCX
-        env:
-          DOCX_URL: ${{ inputs.docx_url }}
+      - name: Get GitHub OIDC token
+        id: oidc
         run: |
-          test -n "$DOCX_URL"
+          test -n "$ACTIONS_ID_TOKEN_REQUEST_URL"
+          test -n "$ACTIONS_ID_TOKEN_REQUEST_TOKEN"
+          oidc_url="${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=placement-command-center-renderer"
+          token=$(curl --fail --silent --show-error             -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN"             "$oidc_url" | jq -r '.value')
+          test -n "$token"
+          test "$token" != "null"
+          echo "token=$token" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch latest customized CV from Appwrite
+        env:
+          OIDC_TOKEN: ${{ steps.oidc.outputs.token }}
+          APPWRITE_FUNCTION_URL: https://placement-command-center-ixkc.sgp.appwrite.run/render-source
+        run: |
           mkdir -p input rendered
-          curl --fail --location --retry 3 --retry-all-errors "$DOCX_URL" -o input/resume.docx
-          file input/resume.docx
+          curl --fail --silent --show-error --location             -H "Authorization: Bearer $OIDC_TOKEN"             "$APPWRITE_FUNCTION_URL"             -o render-source.json
+          jq -e '.status == "SUCCESS"' render-source.json >/dev/null
+          jq -r '.content' render-source.json | base64 -d > input/resume.docx
           test -s input/resume.docx
+          echo "Source: $(jq -r '.file.name' render-source.json)"
+          echo "Bytes:  $(jq -r '.file.bytes' render-source.json)"
 
       - name: Render DOCX to PDF
         run: |
