@@ -14,19 +14,11 @@ import JSZip from 'jszip';
 const DATABASE_ID = '6aa03d1800119759c9bb';
 const JOBS_TABLE_ID = 'jobs';
 
-// REAL Appwrite Storage bucket ID supplied by user.
 const RESUME_BUCKET_ID = '6ac038600011e9e4bc37';
-
-// Exact master CV filename uploaded by user.
 const MASTER_CV_FILENAME = 'MASTER CV FP(5).docx';
 
-// Conservative one-page content budget.
-// The original master CV has ~3,077 visible characters
-// before its cached second-page break.
-// We stay materially below that.
 const MAX_ONE_PAGE_CHARS = 2600;
 
-// Gemini model.
 const GEMINI_MODEL = 'gemini-3.8-flash';
 
 // =======================================================
@@ -109,6 +101,15 @@ function escapeXml(value) {
     .replace(/'/g, '&apos;');
 }
 
+function decodeXml(value) {
+  return String(value || '')
+    .replace(/&apos;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/&gt;/g, '>')
+    .replace(/&lt;/g, '<')
+    .replace(/&amp;/g, '&');
+}
+
 function sanitizeFilename(value) {
   return String(value || 'resume')
     .replace(/[<>:"/\\|?*\x00-\x1F]/g, '')
@@ -133,31 +134,35 @@ function extractVisibleText(paragraphXml) {
   return text;
 }
 
-function decodeXml(value) {
-  return String(value || '')
-    .replace(/&apos;/g, "'")
-    .replace(/&quot;/g, '"')
-    .replace(/&gt;/g, '>')
-    .replace(/&lt;/g, '<')
-    .replace(/&amp;/g, '&');
+function extractParagraphs(documentXml) {
+  return (
+    String(documentXml).match(
+      /<w:p\b[\s\S]*?<\/w:p>/g
+    ) || []
+  );
 }
 
-function replaceParagraphText(
-  paragraphXml,
-  replacement
-) {
-  const escaped = escapeXml(
-    replacement
-  );
+function replaceParagraphText(paragraphXml, replacement) {
+  const escaped = escapeXml(replacement);
+
+  const textMatches = [
+    ...String(paragraphXml).matchAll(
+      /<w:t(?:\s[^>]*)?>([\s\S]*?)<\/w:t>/g
+    )
+  ];
+
+  if (textMatches.length === 0) {
+    return paragraphXml;
+  }
 
   let first = true;
 
   return paragraphXml.replace(
     /(<w:t(?:\s[^>]*)?>)([\s\S]*?)(<\/w:t>)/g,
     (full, open, text, close) => {
-
       if (first) {
         first = false;
+
         return (
           open +
           escaped +
@@ -174,76 +179,42 @@ function replaceParagraphText(
   );
 }
 
-function daysAgo(value) {
-
-  if (!value) {
-    return null;
-  }
-
-  const date =
-    new Date(value);
-
-  if (
-    Number.isNaN(
-      date.getTime()
-    )
-  ) {
-    return null;
-  }
-
-  return (
-    Date.now() -
-    date.getTime()
-  ) /
-  (1000 * 60 * 60 * 24);
-}
-
 // =======================================================
-// APPWRITE REST HELPERS
+// APPWRITE REST
 // =======================================================
 
-function appwriteHeaders(
-  projectId,
-  apiKey
-) {
+function appwriteHeaders(projectId, apiKey) {
   return {
-    'X-Appwrite-Project':
-      projectId,
-
-    'X-Appwrite-Key':
-      apiKey
+    'X-Appwrite-Project': projectId,
+    'X-Appwrite-Key': apiKey
   };
 }
 
 async function appwriteRequest(
   url,
-  options = {},
+  options,
   projectId,
   apiKey
 ) {
+  const response = await fetch(
+    url,
+    {
+      ...options,
 
-  const response =
-    await fetch(
-      url,
-      {
-        ...options,
+      headers: {
+        ...appwriteHeaders(
+          projectId,
+          apiKey
+        ),
 
-        headers: {
-          ...appwriteHeaders(
-            projectId,
-            apiKey
-          ),
-
-          ...(options.headers || {})
-        }
+        ...(options?.headers || {})
       }
-    );
+    }
+  );
 
-  const body =
-    await response.text();
+  const body = await response.text();
 
   if (!response.ok) {
-
     throw new Error(
       `Appwrite ${response.status}: ${body.slice(0, 500)}`
     );
@@ -264,99 +235,63 @@ async function findMasterCv(
   projectId,
   apiKey
 ) {
-
   const url =
     `${endpoint}/storage/buckets/` +
     `${RESUME_BUCKET_ID}/files?limit=100`;
 
-  const result =
-    await appwriteRequest(
-      url,
-      {},
-      projectId,
-      apiKey
-    );
+  const result = await appwriteRequest(
+    url,
+    {},
+    projectId,
+    apiKey
+  );
 
-  const data =
-    JSON.parse(
-      result.body
-    );
+  const data = JSON.parse(result.body);
 
-  const files =
-    Array.isArray(
-      data.files
+  const files = Array.isArray(data.files)
+    ? data.files
+    : [];
+
+  const exact = files
+    .filter(
+      file =>
+        file.name === MASTER_CV_FILENAME
     )
-      ? data.files
-      : [];
+    .sort(
+      (a, b) =>
+        new Date(b.$createdAt).getTime() -
+        new Date(a.$createdAt).getTime()
+    );
 
-  /*
-    Prefer the exact filename.
-    If multiple copies exist, use the newest.
-  */
-
-  const exact =
-    files
-      .filter(
-        file =>
-          file.name ===
-          MASTER_CV_FILENAME
-      )
-      .sort(
-        (a, b) =>
-          new Date(
-            b.$createdAt
-          ).getTime() -
-          new Date(
-            a.$createdAt
-          ).getTime()
-      );
-
-  if (
-    exact.length > 0
-  ) {
+  if (exact.length > 0) {
     return exact[0];
   }
 
-  const fallback =
-    files
-      .filter(
-        file =>
-          normalize(
-            file.name
-          ).includes(
-            normalize(
-              'MASTER CV'
-            )
-          ) &&
-          normalize(
-            file.name
-          ).endsWith(
-            '.docx'
-          )
-      )
-      .sort(
-        (a, b) =>
-          new Date(
-            b.$createdAt
-          ).getTime() -
-          new Date(
-            a.$createdAt
-          ).getTime()
-      );
+  const fallback = files
+    .filter(
+      file =>
+        normalize(file.name).includes(
+          normalize('MASTER CV')
+        ) &&
+        normalize(file.name).endsWith('.docx')
+    )
+    .sort(
+      (a, b) =>
+        new Date(b.$createdAt).getTime() -
+        new Date(a.$createdAt).getTime()
+    );
 
-  if (
-    fallback.length > 0
-  ) {
+  if (fallback.length > 0) {
     return fallback[0];
   }
 
   throw new Error(
-    `Master CV "${MASTER_CV_FILENAME}" was not found in Resume Files bucket.`
+    `Master CV "${MASTER_CV_FILENAME}" was not found in Resume Files bucket ${RESUME_BUCKET_ID}.`
   );
 }
 
 // =======================================================
-// DOWNLOAD MASTER CV
+// DOWNLOAD FILE
 // =======================================================
 
 async function downloadFile(
@@ -365,30 +300,23 @@ async function downloadFile(
   apiKey,
   fileId
 ) {
-
   const url =
     `${endpoint}/storage/buckets/` +
     `${RESUME_BUCKET_ID}/files/` +
     `${encodeURIComponent(fileId)}/download`;
 
-  const response =
-    await fetch(
-      url,
-      {
-        headers:
-          appwriteHeaders(
-            projectId,
-            apiKey
-          )
-      }
-    );
+  const response = await fetch(
+    url,
+    {
+      headers: appwriteHeaders(
+        projectId,
+        apiKey
+      )
+    }
+  );
 
-  if (
-    !response.ok
-  ) {
-
-    const text =
-      await response.text();
+  if (!response.ok) {
+    const text = await response.text();
 
     throw new Error(
       `Master CV download failed: ${response.status} ${text.slice(0, 300)}`
@@ -401,7 +329,7 @@ async function downloadFile(
 }
 
 // =======================================================
-// UPLOAD CUSTOMIZED CV
+// UPLOAD FILE
 // =======================================================
 
 async function uploadFile(
@@ -411,13 +339,11 @@ async function uploadFile(
   buffer,
   filename
 ) {
-
   const url =
     `${endpoint}/storage/buckets/` +
     `${RESUME_BUCKET_ID}/files`;
 
-  const form =
-    new FormData();
+  const form = new FormData();
 
   form.append(
     'fileId',
@@ -436,84 +362,57 @@ async function uploadFile(
     filename
   );
 
-  const response =
-    await fetch(
-      url,
-      {
-        method: 'POST',
+  const response = await fetch(
+    url,
+    {
+      method: 'POST',
 
-        headers:
-          appwriteHeaders(
-            projectId,
-            apiKey
-          ),
+      headers:
+        appwriteHeaders(
+          projectId,
+          apiKey
+        ),
 
-        body:
-          form
-      }
-    );
+      body: form
+    }
+  );
 
-  const body =
-    await response.text();
+  const body = await response.text();
 
-  if (
-    !response.ok
-  ) {
-
+  if (!response.ok) {
     throw new Error(
       `Customized CV upload failed: ${response.status} ${body.slice(0, 500)}`
     );
   }
 
-  return JSON.parse(
-    body
-  );
+  return JSON.parse(body);
 }
 
 // =======================================================
-// EXTRACT MASTER CV PARAGRAPHS
+// BUILD PARAGRAPH MAP
 // =======================================================
 
-function buildParagraphMap(
-  documentXml
-) {
-
+function buildParagraphMap(documentXml) {
   const blocks =
-    documentXml.match(
-      /<w:p\b[\s\S]*?<\/w:p>/g
-    ) || [];
+    extractParagraphs(documentXml);
 
   const paragraphs = [];
 
   let counter = 1;
 
-  for (
-    const block
-    of blocks
-  ) {
-
+  for (const block of blocks) {
     const text =
-      extractVisibleText(
-        block
-      );
+      extractVisibleText(block);
 
-    if (
-      !text.trim()
-    ) {
+    if (!text.trim()) {
       continue;
     }
 
     paragraphs.push({
-      id:
-        `P${counter}`,
-
+      id: `P${counter}`,
       text,
-
-      normalized:
-        normalize(text),
-
-      xml:
-        block
+      normalized: normalize(text),
+      xml: block
     });
 
     counter++;
@@ -523,7 +422,7 @@ function buildParagraphMap(
 }
 
 // =======================================================
-// CREATE GEMINI EDIT PLAN
+// GEMINI EDIT PLAN
 // =======================================================
 
 async function createEditPlan(
@@ -531,146 +430,127 @@ async function createEditPlan(
   job,
   paragraphs
 ) {
-
   const prompt = `
 You are the Resume Customization Agent.
 
-Your task is to create a CONTENT-ONLY edit plan for the candidate's master CV.
+Create a CONTENT-ONLY edit plan for the candidate's existing master CV.
 
 ABSOLUTE RULES:
 
 1. The master CV format is LOCKED.
-2. Do not redesign it.
-3. Do not change fonts, font sizes, colors, margins, spacing, layout, bullets, section order or styling.
-4. Do not invent ANY qualification, experience, number, employer, skill, achievement or result.
-5. Use only facts supported by the candidate truth base and the master CV paragraphs.
-6. The final CV MUST fit one page.
-7. Content removal is allowed and expected.
-8. Content rewriting is allowed only where the rewritten statement remains factually equivalent to the candidate's documented experience.
-9. Keep the Internship section because it contains the strongest documented professional evidence.
-10. Keep PGDM and Graduation. 12th and 10th may be removed for space.
-11. Select at most 3 projects.
-12. Select at most 3 certifications.
-13. Select at most 2 achievements.
-14. Keep only the most relevant extracurricular entries.
-15. Keep only the most relevant skill lines.
-16. Keep the summary concise: maximum 360 characters.
-17. Each rewritten project bullet must be maximum 240 characters.
-18. Do not rewrite internship bullets in this first version because they contain carefully formatted evidence.
-19. Never remove the section headings themselves.
-20. The goal is ONE PAGE, not maximum content.
+2. Never redesign the CV.
+3. Never change fonts, font sizes, colors, margins, spacing, layout, bullets, section order or styling.
+4. Never invent any qualification, experience, number, employer, skill, achievement or result.
+5. Use only facts supported by the candidate truth base and master CV.
+6. The final CV must remain one page.
+7. Content removal is allowed.
+8. Content rewriting is allowed only when factually equivalent.
+9. Keep the Internship section.
+10. Keep PGDM and Graduation.
+11. 12th and 10th may be removed.
+12. Select at most 3 projects.
+13. Select at most 3 certifications.
+14. Select at most 2 achievements.
+15. Keep only the most relevant extracurricular entries.
+16. Keep only the most relevant skill lines.
+17. Keep summary <= 360 characters.
+18. Each project rewrite <= 240 characters.
+19. Do not rewrite internship bullets.
+20. Do not remove section headings.
+21. Optimize for job relevance while preserving truth.
 
-JOB:
-
-Title:
+JOB TITLE:
 ${job.job_title}
 
-Company:
+COMPANY:
 ${job.company_name}
 
-Location:
+LOCATION:
 ${job.location || 'Unknown'}
 
-Job description:
+JOB DESCRIPTION:
 ${String(job.job_description || '').slice(0, 14000)}
 
 CANDIDATE TRUTH BASE:
 ${CANDIDATE_FACTS}
 
 MASTER CV PARAGRAPHS:
-
 ${paragraphs
-  .map(
-    p =>
-      `${p.id}: ${p.text}`
-  )
+  .map(p => `${p.id}: ${p.text}`)
   .join('\n')}
 
-Return ONLY valid JSON in this exact structure:
+Return ONLY valid JSON:
 
 {
   "summaryRewrite": "string",
-  "removeIds": ["P1", "P2"],
-  "projectRewrites": {
-    "P23": "rewritten bullet",
-    "P25": "rewritten bullet"
-  },
-  "keepProjectIds": ["P22", "P24", "P26"],
-  "keepCertificationIds": ["P33", "P34", "P37"],
-  "keepAchievementIds": ["P45", "P46"],
-  "keepExtraCurricularIds": ["P49", "P50", "P53", "P54"],
-  "keepSkillIds": ["P39", "P40", "P41"],
-  "keepOtherInfoIds": ["P57"],
+  "removeIds": [],
+  "projectRewrites": {},
+  "keepProjectIds": [],
+  "keepCertificationIds": [],
+  "keepAchievementIds": [],
+  "keepExtraCurricularIds": [],
+  "keepSkillIds": [],
+  "keepOtherInfoIds": [],
   "reason": "one concise sentence"
 }
 `;
 
-  const response =
-    await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(geminiApiKey)}`,
-      {
-        method: 'POST',
+  const url =
+    `https://generativelanguage.googleapis.com/` +
+    `v1beta/models/${GEMINI_MODEL}:generateContent` +
+    `?key=${encodeURIComponent(geminiApiKey)}`;
 
-        headers: {
-          'Content-Type':
-            'application/json'
-        },
+  const response = await fetch(
+    url,
+    {
+      method: 'POST',
 
-        body:
-          JSON.stringify({
-            contents: [
+      headers: {
+        'Content-Type':
+          'application/json'
+      },
+
+      body: JSON.stringify({
+        contents: [
+          {
+            role: 'user',
+
+            parts: [
               {
-                role: 'user',
-
-                parts: [
-                  {
-                    text:
-                      prompt
-                  }
-                ]
+                text: prompt
               }
-            ],
+            ]
+          }
+        ],
 
-            generationConfig: {
-              temperature:
-                0.15,
-
-              maxOutputTokens:
-                3500,
-
-              responseMimeType:
-                'application/json'
-            }
-          })
-      }
-    );
+        generationConfig: {
+          temperature: 0.15,
+          maxOutputTokens: 3500,
+          responseMimeType:
+            'application/json'
+        }
+      })
+    }
+  );
 
   const body =
     await response.text();
 
-  if (
-    !response.ok
-  ) {
-
+  if (!response.ok) {
     throw new Error(
       `Gemini ${response.status}: ${body.slice(0, 500)}`
     );
   }
 
   const data =
-    JSON.parse(
-      body
-    );
+    JSON.parse(body);
 
   const raw =
     data?.candidates?.[0]?.content?.parts
-      ?.map(
-        part => part.text || ''
-      )
+      ?.map(part => part.text || '')
       .join('') || '';
 
   if (!raw) {
-
     throw new Error(
       'Gemini returned no edit plan.'
     );
@@ -678,23 +558,12 @@ Return ONLY valid JSON in this exact structure:
 
   const clean =
     raw
-      .replace(
-        /^```json\s*/i,
-        ''
-      )
-      .replace(
-        /^```\s*/i,
-        ''
-      )
-      .replace(
-        /\s*```$/i,
-        ''
-      )
+      .replace(/^```json\s*/i, '')
+      .replace(/^```\s*/i, '')
+      .replace(/\s*```$/i, '')
       .trim();
 
-  return JSON.parse(
-    clean
-  );
+  return JSON.parse(clean);
 }
 
 // =======================================================
@@ -706,44 +575,77 @@ function applyEditPlan(
   paragraphs,
   plan
 ) {
-
   const paragraphById =
     new Map(
       paragraphs.map(
-        p => [
-          p.id,
-          p
-        ]
+        p => [p.id, p]
       )
     );
-
-  const removeIds =
-    new Set(
-      Array.isArray(
-        plan.removeIds
-      )
-        ? plan.removeIds
-        : []
-    );
-
-  // ---------------------------------------------------
-  // Remove anything AI explicitly selected.
-  // ---------------------------------------------------
 
   let output =
     documentXml;
 
+  // ---------------------------------------------------
+  // ONLY THESE PARAGRAPHS MAY BE REMOVED BY AI.
+  // Internship paragraphs are deliberately excluded.
+  // ---------------------------------------------------
+
+  const removableIds =
+    new Set([
+      'P11',
+      'P12',
+      'P13',
+      'P14',
+
+      'P22',
+      'P23',
+      'P24',
+      'P25',
+      'P26',
+      'P27',
+      'P28',
+      'P29',
+      'P30',
+      'P31',
+
+      'P34',
+      'P35',
+      'P36',
+      'P37',
+
+      'P43',
+
+      'P45',
+      'P46',
+      'P47',
+
+      'P49',
+      'P50',
+      'P51',
+      'P52',
+      'P53',
+      'P54',
+
+      'P57',
+      'P58'
+    ]);
+
+  const requestedRemovals =
+    Array.isArray(plan.removeIds)
+      ? plan.removeIds
+      : [];
+
   for (
-    const paragraph
-    of paragraphs
+    const id of requestedRemovals
   ) {
+    if (!removableIds.has(id)) {
+      continue;
+    }
 
-    if (
-      removeIds.has(
-        paragraph.id
-      )
-    ) {
+    const paragraph =
+      paragraphById.get(id);
 
+    if (paragraph) {
       output =
         output.replace(
           paragraph.xml,
@@ -753,10 +655,10 @@ function applyEditPlan(
   }
 
   // ---------------------------------------------------
-  // Remove project entries not selected.
+  // PROJECTS
   // ---------------------------------------------------
 
-  const allProjectPairs = [
+  const projectPairs = [
     ['P22', 'P23'],
     ['P24', 'P25'],
     ['P26', 'P27'],
@@ -764,60 +666,66 @@ function applyEditPlan(
     ['P30', 'P31']
   ];
 
-  const keepProjectIds =
-    new Set(
-      Array.isArray(
-        plan.keepProjectIds
-      )
-        ? plan.keepProjectIds
-        : []
-    );
+  const requestedProjects =
+    Array.isArray(
+      plan.keepProjectIds
+    )
+      ? plan.keepProjectIds
+      : [];
 
-  for (
-    const [
-      titleId,
-      bulletId
-    ]
-    of allProjectPairs
-  ) {
-
-    if (
-      keepProjectIds.size > 0 &&
-      !keepProjectIds.has(
-        titleId
+  const validProjects =
+    projectPairs
+      .map(pair => pair[0])
+      .filter(
+        id =>
+          requestedProjects.includes(id)
       )
+      .slice(0, 3);
+
+  if (validProjects.length > 0) {
+    for (
+      const [
+        titleId,
+        bulletId
+      ]
+      of projectPairs
     ) {
-
-      const title =
-        paragraphById.get(
+      if (
+        !validProjects.includes(
           titleId
-        );
-
-      const bullet =
-        paragraphById.get(
-          bulletId
-        );
-
-      if (title) {
-        output =
-          output.replace(
-            title.xml,
-            ''
+        )
+      ) {
+        const title =
+          paragraphById.get(
+            titleId
           );
-      }
 
-      if (bullet) {
-        output =
-          output.replace(
-            bullet.xml,
-            ''
+        const bullet =
+          paragraphById.get(
+            bulletId
           );
+
+        if (title) {
+          output =
+            output.replace(
+              title.xml,
+              ''
+            );
+        }
+
+        if (bullet) {
+          output =
+            output.replace(
+              bullet.xml,
+              ''
+            );
+        }
       }
     }
   }
 
   // ---------------------------------------------------
-  // Certifications
+  // CERTIFICATIONS
   // ---------------------------------------------------
 
   const certificationIds = [
@@ -828,33 +736,35 @@ function applyEditPlan(
     'P37'
   ];
 
-  const keptCerts =
-    new Set(
-      Array.isArray(
-        plan.keepCertificationIds
-      )
-        ? plan.keepCertificationIds
-        : []
-    );
+  const validCertifications =
+    Array.isArray(
+      plan.keepCertificationIds
+    )
+      ? plan.keepCertificationIds
+          .filter(
+            id =>
+              certificationIds.includes(
+                id
+              )
+          )
+          .slice(0, 3)
+      : [];
 
   if (
-    keptCerts.size > 0
+    validCertifications.length > 0
   ) {
-
     for (
-      const id
-      of certificationIds
+      const id of certificationIds
     ) {
-
       if (
-        !keptCerts.has(id)
+        !validCertifications.includes(
+          id
+        )
       ) {
-
         const paragraph =
           paragraphById.get(id);
 
         if (paragraph) {
-
           output =
             output.replace(
               paragraph.xml,
@@ -866,7 +776,7 @@ function applyEditPlan(
   }
 
   // ---------------------------------------------------
-  // Achievements
+  // ACHIEVEMENTS
   // ---------------------------------------------------
 
   const achievementIds = [
@@ -875,33 +785,33 @@ function applyEditPlan(
     'P47'
   ];
 
-  const keptAchievements =
-    new Set(
-      Array.isArray(
-        plan.keepAchievementIds
-      )
-        ? plan.keepAchievementIds
-        : []
-    );
+  const validAchievements =
+    Array.isArray(
+      plan.keepAchievementIds
+    )
+      ? plan.keepAchievementIds
+          .filter(
+            id =>
+              achievementIds.includes(
+                id
+              )
+          )
+          .slice(0, 2)
+      : [];
 
   if (
-    keptAchievements.size > 0
+    validAchievements.length > 0
   ) {
-
     for (
-      const id
-      of achievementIds
+      const id of achievementIds
     ) {
-
       if (
-        !keptAchievements.has(id)
+        !validAchievements.includes(id)
       ) {
-
         const paragraph =
           paragraphById.get(id);
 
         if (paragraph) {
-
           output =
             output.replace(
               paragraph.xml,
@@ -913,7 +823,7 @@ function applyEditPlan(
   }
 
   // ---------------------------------------------------
-  // Skills
+  // SKILLS
   // ---------------------------------------------------
 
   const skillIds = [
@@ -924,33 +834,30 @@ function applyEditPlan(
     'P43'
   ];
 
-  const keptSkills =
-    new Set(
-      Array.isArray(
-        plan.keepSkillIds
-      )
-        ? plan.keepSkillIds
-        : []
-    );
+  const validSkills =
+    Array.isArray(
+      plan.keepSkillIds
+    )
+      ? plan.keepSkillIds
+          .filter(
+            id =>
+              skillIds.includes(id)
+          )
+      : [];
 
   if (
-    keptSkills.size > 0
+    validSkills.length > 0
   ) {
-
     for (
-      const id
-      of skillIds
+      const id of skillIds
     ) {
-
       if (
-        !keptSkills.has(id)
+        !validSkills.includes(id)
       ) {
-
         const paragraph =
           paragraphById.get(id);
 
         if (paragraph) {
-
           output =
             output.replace(
               paragraph.xml,
@@ -962,7 +869,7 @@ function applyEditPlan(
   }
 
   // ---------------------------------------------------
-  // Extra-curricular
+  // EXTRA-CURRICULAR
   // ---------------------------------------------------
 
   const extraIds = [
@@ -974,38 +881,30 @@ function applyEditPlan(
     'P54'
   ];
 
-  const keptExtra =
-    new Set(
-      Array.isArray(
-        plan.keepExtraCurricularIds
-      )
-        ? plan.keepExtraCurricularIds
-        : []
-    );
-
-  /*
-    Keep a sensible default if the model fails
-    to return an extracurricular selection.
-  */
+  const validExtra =
+    Array.isArray(
+      plan.keepExtraCurricularIds
+    )
+      ? plan.keepExtraCurricularIds
+          .filter(
+            id =>
+              extraIds.includes(id)
+          )
+      : [];
 
   if (
-    keptExtra.size > 0
+    validExtra.length > 0
   ) {
-
     for (
-      const id
-      of extraIds
+      const id of extraIds
     ) {
-
       if (
-        !keptExtra.has(id)
+        !validExtra.includes(id)
       ) {
-
         const paragraph =
           paragraphById.get(id);
 
         if (paragraph) {
-
           output =
             output.replace(
               paragraph.xml,
@@ -1017,7 +916,7 @@ function applyEditPlan(
   }
 
   // ---------------------------------------------------
-  // Other information
+  // OTHER INFORMATION
   // ---------------------------------------------------
 
   const otherIds = [
@@ -1025,29 +924,26 @@ function applyEditPlan(
     'P58'
   ];
 
-  const keptOther =
-    new Set(
-      Array.isArray(
-        plan.keepOtherInfoIds
-      )
-        ? plan.keepOtherInfoIds
-        : ['P57']
-    );
+  const validOther =
+    Array.isArray(
+      plan.keepOtherInfoIds
+    )
+      ? plan.keepOtherInfoIds.filter(
+          id =>
+            otherIds.includes(id)
+        )
+      : ['P57'];
 
   for (
-    const id
-    of otherIds
+    const id of otherIds
   ) {
-
     if (
-      !keptOther.has(id)
+      !validOther.includes(id)
     ) {
-
       const paragraph =
         paragraphById.get(id);
 
       if (paragraph) {
-
         output =
           output.replace(
             paragraph.xml,
@@ -1058,26 +954,21 @@ function applyEditPlan(
   }
 
   // ---------------------------------------------------
-  // Remove school-level education for space.
+  // ALWAYS REMOVE SCHOOL-LEVEL EDUCATION
   // ---------------------------------------------------
 
-  const optionalEducationIds = [
-    'P11',
-    'P12',
-    'P13',
-    'P14'
-  ];
-
   for (
-    const id
-    of optionalEducationIds
+    const id of [
+      'P11',
+      'P12',
+      'P13',
+      'P14'
+    ]
   ) {
-
     const paragraph =
       paragraphById.get(id);
 
     if (paragraph) {
-
       output =
         output.replace(
           paragraph.xml,
@@ -1087,34 +978,22 @@ function applyEditPlan(
   }
 
   // ---------------------------------------------------
-  // Rewrite summary.
+  // SUMMARY
   // ---------------------------------------------------
 
   if (
     plan.summaryRewrite &&
     paragraphById.has('P5')
   ) {
-
     const original =
-      paragraphById.get(
-        'P5'
-      );
-
-    /*
-      Important:
-      P5 is a single normal text run in the
-      master document, so formatting stays intact.
-    */
+      paragraphById.get('P5');
 
     const replacement =
       String(
         plan.summaryRewrite
       )
         .trim()
-        .slice(
-          0,
-          360
-        );
+        .slice(0, 360);
 
     output =
       output.replace(
@@ -1127,7 +1006,7 @@ function applyEditPlan(
   }
 
   // ---------------------------------------------------
-  // Rewrite selected project bullets.
+  // PROJECT REWRITES
   // ---------------------------------------------------
 
   const projectRewrites =
@@ -1145,31 +1024,39 @@ function applyEditPlan(
       projectRewrites
     )
   ) {
-
     if (
       !paragraphById.has(id)
     ) {
       continue;
     }
 
-    const original =
-      paragraphById.get(id);
+    if (
+      ![
+        'P23',
+        'P25',
+        'P27',
+        'P29',
+        'P31'
+      ].includes(id)
+    ) {
+      continue;
+    }
 
     const cleanReplacement =
       String(
         replacement || ''
       )
         .trim()
-        .slice(
-          0,
-          240
-        );
+        .slice(0, 240);
 
     if (
       !cleanReplacement
     ) {
       continue;
     }
+
+    const original =
+      paragraphById.get(id);
 
     output =
       output.replace(
@@ -1181,10 +1068,7 @@ function applyEditPlan(
       );
   }
 
-  // ---------------------------------------------------
-  // Remove cached page-break information.
-  // ---------------------------------------------------
-
+  // Remove stale cached page-break markers.
   output =
     output.replace(
       /<w:lastRenderedPageBreak\s*\/>/g,
@@ -1195,233 +1079,46 @@ function applyEditPlan(
 }
 
 // =======================================================
-// FALLBACK ONE-PAGE TRIMMER
+// ONE-PAGE CONTENT GATE
 // =======================================================
 
-function trimToOnePageBudget(
-  documentXml
-) {
-
-  function visibleChars(
-    xml
-  ) {
-
-    return extractVisibleText(
-      `<w:p>${xml.match(/<w:p\b[\s\S]*?<\/w:p>/g)?.join('') || ''}</w:p>`
-    ).length;
-  }
-
-  let output =
-    documentXml;
-
-  let current =
-    visibleChars(
-      output
+function countVisibleCharacters(xml) {
+  return extractParagraphs(xml)
+    .reduce(
+      (total, paragraph) =>
+        total +
+        extractVisibleText(
+          paragraph
+        ).length,
+      0
     );
-
-  if (
-    current <= MAX_ONE_PAGE_CHARS
-  ) {
-    return {
-      xml:
-        output,
-
-      chars:
-        current,
-
-      trimmed:
-        false
-    };
-  }
-
-  /*
-    These are the safest low-priority blocks
-    to remove when the one-page budget is exceeded.
-
-    Each pair is TITLE + BODY.
-  */
-
-  const removalGroups = [
-
-    // Hobbies
-    ['P58'],
-
-    // Cubmaster
-    ['P51', 'P52'],
-
-    // Second Scouts entry
-    ['P53', 'P54'],
-
-    // Extra achievement
-    ['P47'],
-
-    // Competition achievement
-    ['P45'],
-
-    // Lowest-priority certification entries
-    ['P37'],
-    ['P36'],
-    ['P35'],
-    ['P34'],
-
-    // Extra skill lines
-    ['P43'],
-    ['P42'],
-
-    // Project options
-    ['P30', 'P31'],
-    ['P28', 'P29'],
-    ['P22', 'P23'],
-
-    // Final extracurricular body
-    ['P50'],
-
-    // Remaining achievement
-    ['P46']
-  ];
-
-  const paragraphs =
-    output.match(
-      /<w:p\b[\s\S]*?<\/w:p>/g
-    ) || [];
-
-  for (
-    const group
-    of removalGroups
-  ) {
-
-    for (
-      const id
-      of group
-    ) {
-
-      const original =
-        paragraphs.find(
-          paragraph =>
-            paragraphToStableId(
-              paragraph
-            ) === id
-        );
-
-      if (
-        original
-      ) {
-
-        output =
-          output.replace(
-            original,
-            ''
-          );
-      }
-    }
-
-    current =
-      visibleChars(
-        output
-      );
-
-    if (
-      current <=
-      MAX_ONE_PAGE_CHARS
-    ) {
-
-      return {
-        xml:
-          output,
-
-        chars:
-          current,
-
-        trimmed:
-          true
-      };
-    }
-  }
-
-  return {
-    xml:
-      output,
-
-    chars:
-      current,
-
-    trimmed:
-      true
-  };
 }
-
-function paragraphToStableId(
-  paragraphXml
-) {
-
-  /*
-    This fallback mapper is based on the
-    stable paragraph order of the master CV.
-    It is only used after the master is parsed
-    in its original order.
-  */
-
-  return null;
-}
-
-// =======================================================
-// BETTER ONE-PAGE TRIMMER
-// =======================================================
 
 function trimUsingParagraphMap(
   documentXml,
   paragraphs
 ) {
-
-  function chars(xml) {
-
-    const blocks =
-      xml.match(
-        /<w:p\b[\s\S]*?<\/w:p>/g
-      ) || [];
-
-    return blocks.reduce(
-      (
-        total,
-        block
-      ) =>
-        total +
-        extractVisibleText(
-          block
-        ).length,
-      0
-    );
-  }
-
   let output =
     documentXml;
 
   let current =
-    chars(
+    countVisibleCharacters(
       output
     );
 
   if (
-    current <= MAX_ONE_PAGE_CHARS
+    current <=
+    MAX_ONE_PAGE_CHARS
   ) {
-
     return {
-      xml:
-        output,
-
-      chars:
-        current,
-
-      trimmed:
-        false,
-
-      passed:
-        true
+      xml: output,
+      chars: current,
+      trimmed: false,
+      passed: true
     };
   }
 
   const removals = [
-
     ['P58'],
 
     ['P51', 'P52'],
@@ -1470,20 +1167,15 @@ function trimUsingParagraphMap(
     );
 
   for (
-    const group
-    of removals
+    const group of removals
   ) {
-
     for (
-      const id
-      of group
+      const id of group
     ) {
-
       const block =
         map.get(id);
 
       if (block) {
-
         output =
           output.replace(
             block,
@@ -1493,7 +1185,7 @@ function trimUsingParagraphMap(
     }
 
     current =
-      chars(
+      countVisibleCharacters(
         output
       );
 
@@ -1501,47 +1193,31 @@ function trimUsingParagraphMap(
       current <=
       MAX_ONE_PAGE_CHARS
     ) {
-
       return {
-        xml:
-          output,
-
-        chars:
-          current,
-
-        trimmed:
-          true,
-
-        passed:
-          true
+        xml: output,
+        chars: current,
+        trimmed: true,
+        passed: true
       };
     }
   }
 
   return {
-    xml:
-      output,
-
-    chars:
-      current,
-
-    trimmed:
-      true,
-
-    passed:
-      false
+    xml: output,
+    chars: current,
+    trimmed: true,
+    passed: false
   };
 }
 
 // =======================================================
-// UPDATE DOCX METADATA
+// DOCX METADATA
 // =======================================================
 
-function updateDocProperties(
+async function updateDocProperties(
   zip,
   visibleChars
 ) {
-
   const appFile =
     zip.file(
       'docProps/app.xml'
@@ -1551,50 +1227,44 @@ function updateDocProperties(
     return;
   }
 
-  let xml =
-    appFile
-      .async('text');
+  let appXml =
+    await appFile.async('text');
 
-  return xml.then(
-    appXml => {
+  appXml =
+    appXml.replace(
+      /<Pages>\d+<\/Pages>/i,
+      '<Pages>1</Pages>'
+    );
 
-      appXml =
-        appXml.replace(
-          /<Pages>\d+<\/Pages>/i,
-          '<Pages>1</Pages>'
-        );
+  const estimatedWords =
+    Math.max(
+      1,
+      Math.round(
+        visibleChars / 6
+      )
+    );
 
-      const estimatedWords =
-        Math.max(
-          1,
-          Math.round(
-            visibleChars / 6
-          )
-        );
+  appXml =
+    appXml.replace(
+      /<Words>\d+<\/Words>/i,
+      `<Words>${estimatedWords}</Words>`
+    );
 
-      appXml =
-        appXml.replace(
-          /<Words>\d+<\/Words>/i,
-          `<Words>${estimatedWords}</Words>`
-        );
+  appXml =
+    appXml.replace(
+      /<Characters>\d+<\/Characters>/i,
+      `<Characters>${visibleChars}</Characters>`
+    );
 
-      appXml =
-        appXml.replace(
-          /<Characters>\d+<\/Characters>/i,
-          `<Characters>${visibleChars}</Characters>`
-        );
+  appXml =
+    appXml.replace(
+      /<CharactersWithSpaces>\d+<\/CharactersWithSpaces>/i,
+      `<CharactersWithSpaces>${visibleChars}</CharactersWithSpaces>`
+    );
 
-      appXml =
-        appXml.replace(
-          /<CharactersWithSpaces>\d+<\/CharactersWithSpaces>/i,
-          `<CharactersWithSpaces>${visibleChars}</CharactersWithSpaces>`
-        );
-
-      zip.file(
-        'docProps/app.xml',
-        appXml
-      );
-    }
+  zip.file(
+    'docProps/app.xml',
+    appXml
   );
 }
 
@@ -1606,7 +1276,6 @@ async function selectJob(
   tablesDB,
   requestedJobId
 ) {
-
   const response =
     await tablesDB.listRows({
       databaseId:
@@ -1626,7 +1295,6 @@ async function selectJob(
   if (
     requestedJobId
   ) {
-
     const requested =
       jobs.find(
         job =>
@@ -1635,7 +1303,6 @@ async function selectJob(
       );
 
     if (!requested) {
-
       throw new Error(
         `Job ${requestedJobId} was not found in Jobs.`
       );
@@ -1649,14 +1316,15 @@ async function selectJob(
       job =>
         job.eligibility_status ===
           'ELIGIBLE' &&
-        job.match_status !==
-          'NOT_A_MATCH'
+        normalize(
+          job.match_status
+        ) !==
+          'not_a_match'
     );
 
   if (
     eligible.length === 0
   ) {
-
     throw new Error(
       'No eligible job is available for resume customization.'
     );
@@ -1664,7 +1332,6 @@ async function selectJob(
 
   eligible.sort(
     (a, b) => {
-
       const aScore =
         Number(
           a.opportunity_score
@@ -1679,12 +1346,17 @@ async function selectJob(
         bScore !==
         aScore
       ) {
-
         return (
           bScore -
           aScore
         );
       }
+
+      const rank = {
+        high_match: 3,
+        medium_match: 2,
+        low_match: 1
+      };
 
       const aMatch =
         normalize(
@@ -1695,17 +1367,6 @@ async function selectJob(
         normalize(
           b.match_status
         );
-
-      const rank = {
-        high_match:
-          3,
-
-        medium_match:
-          2,
-
-        low_match:
-          1
-      };
 
       return (
         (rank[bMatch] || 0) -
@@ -1727,9 +1388,7 @@ export default async ({
   log,
   error
 }) => {
-
   try {
-
     const projectId =
       process.env
         .APPWRITE_FUNCTION_PROJECT_ID;
@@ -1777,26 +1436,21 @@ export default async ({
     let body = {};
 
     try {
-
       if (
         req?.body &&
         typeof req.body ===
           'string'
       ) {
-
         body =
           JSON.parse(
             req.body
           );
-
       } else if (
         req?.bodyJson
       ) {
-
         body =
           req.bodyJson;
       }
-
     } catch {
       body = {};
     }
@@ -1806,7 +1460,7 @@ export default async ({
       null;
 
     // ===================================================
-    // SELECT ONE JOB
+    // APPWRITE CLIENT
     // ===================================================
 
     const client =
@@ -1826,6 +1480,10 @@ export default async ({
         client
       );
 
+    // ===================================================
+    // SELECT JOB
+    // ===================================================
+
     const job =
       await selectJob(
         tablesDB,
@@ -1836,7 +1494,6 @@ export default async ({
       job.eligibility_status !==
       'ELIGIBLE'
     ) {
-
       throw new Error(
         `Selected job is not ELIGIBLE: ${job.eligibility_status}`
       );
@@ -1876,20 +1533,28 @@ export default async ({
       );
 
     if (!documentFile) {
-
       throw new Error(
         'Invalid DOCX: word/document.xml not found.'
       );
     }
 
     const documentXml =
-      await documentFile
-        .async('text');
+      await documentFile.async(
+        'text'
+      );
 
     const paragraphs =
       buildParagraphMap(
         documentXml
       );
+
+    if (
+      paragraphs.length === 0
+    ) {
+      throw new Error(
+        'Master CV contains no readable Word paragraphs.'
+      );
+    }
 
     // ===================================================
     // GEMINI EDIT PLAN
@@ -1929,14 +1594,13 @@ export default async ({
     if (
       !trimmed.passed
     ) {
-
       throw new Error(
         `ONE_PAGE_GATE_FAILED: customized content remained at ${trimmed.chars} characters; maximum allowed is ${MAX_ONE_PAGE_CHARS}. No CV was uploaded.`
       );
     }
 
     // ===================================================
-    // WRITE DOCX XML
+    // WRITE XML
     // ===================================================
 
     zip.file(
@@ -1950,7 +1614,7 @@ export default async ({
     );
 
     // ===================================================
-    // BUILD OUTPUT
+    // BUILD DOCX
     // ===================================================
 
     const outputBuffer =
@@ -1967,7 +1631,7 @@ export default async ({
       });
 
     // ===================================================
-    // FILE NAME
+    // OUTPUT FILENAME
     // ===================================================
 
     const company =
@@ -2002,82 +1666,87 @@ export default async ({
     // RESULT
     // ===================================================
 
-    return res.json({
-
-      status:
-        'SUCCESS',
-
-      onePageGate:
-        'PASS',
-
-      onePageBasis:
-        'Conservative master-template content budget + cached page-break removal',
-
-      job: {
-        id:
-          job.$id,
-
-        title:
-          job.job_title,
-
-        company:
-          job.company_name,
-
-        matchStatus:
-          job.match_status,
-
-        opportunityScore:
-          job.opportunity_score
-      },
-
-      masterCv: {
-        fileId:
-          masterFile.$id,
-
-        filename:
-          masterFile.name
-      },
-
-      customizedCv: {
-        fileId:
-          uploaded.$id,
-
-        filename:
-          uploaded.name
-      },
-
-      visibleCharacters:
-        trimmed.chars,
-
-      maxOnePageCharacters:
-        MAX_ONE_PAGE_CHARS,
-
-      aiReason:
-        plan.reason ||
-        'Content tailored to the selected job.',
-
-      formatLocked:
-        true,
-
-      contentOnlyChanges:
-        true
-    });
-
-  } catch (
-    err
-  ) {
-
-    error(
-      err.message
+    log(
+      `Resume customization succeeded for ${job.company_name} - ${job.job_title}`
     );
 
-    return res.json({
+    return res.json(
+      {
+        status:
+          'SUCCESS',
 
-      status:
-        'FAILED',
+        onePageGate:
+          'PASS',
 
-      error:
-        err.message
-    }, 500);
+        onePageBasis:
+          'Conservative master-template content budget',
+
+        job: {
+          id:
+            job.$id,
+
+          title:
+            job.job_title,
+
+          company:
+            job.company_name,
+
+          matchStatus:
+            job.match_status,
+
+          opportunityScore:
+            job.opportunity_score
+        },
+
+        masterCv: {
+          fileId:
+            masterFile.$id,
+
+          filename:
+            masterFile.name
+        },
+
+        customizedCv: {
+          fileId:
+            uploaded.$id,
+
+          filename:
+            uploaded.name
+        },
+
+        visibleCharacters:
+          trimmed.chars,
+
+        maxOnePageCharacters:
+          MAX_ONE_PAGE_CHARS,
+
+        aiReason:
+          plan.reason ||
+          'Content tailored to the selected job.',
+
+        formatLocked:
+          true,
+
+        contentOnlyChanges:
+          true
+      }
+    );
+  } catch (err) {
+    const message =
+      err?.message ||
+      String(err);
+
+    error(message);
+
+    return res.json(
+      {
+        status:
+          'FAILED',
+
+        error:
+          message
+      },
+      500
+    );
   }
 };
