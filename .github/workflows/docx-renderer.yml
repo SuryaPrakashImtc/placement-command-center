@@ -2,10 +2,16 @@ name: DOCX Renderer
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "*/5 * * * *"
 
 permissions:
   id-token: write
   contents: read
+
+concurrency:
+  group: resume-render-validation
+  cancel-in-progress: true
 
 jobs:
   render:
@@ -32,24 +38,38 @@ jobs:
           echo "token=$token" >> "$GITHUB_OUTPUT"
 
       - name: Fetch latest customized CV from Appwrite
+        id: source
         env:
           OIDC_TOKEN: ${{ steps.oidc.outputs.token }}
           APPWRITE_FUNCTION_URL: https://placement-command-center-ixkc.sgp.appwrite.run/render-source
         run: |
           mkdir -p input rendered
           curl --fail --silent --show-error --location             -H "Authorization: Bearer $OIDC_TOKEN"             "$APPWRITE_FUNCTION_URL"             -o render-source.json
+
+          status=$(jq -r '.status // "FAILED"' render-source.json)
+
+          if [ "$status" = "NO_CV_AVAILABLE" ]; then
+            echo "No customized CV is currently waiting for render validation."
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           jq -e '.status == "SUCCESS"' render-source.json >/dev/null
           jq -r '.content' render-source.json | base64 -d > input/resume.docx
           test -s input/resume.docx
+
+          echo "available=true" >> "$GITHUB_OUTPUT"
           echo "Source: $(jq -r '.file.name' render-source.json)"
           echo "Bytes:  $(jq -r '.file.bytes' render-source.json)"
 
       - name: Render DOCX to PDF
+        if: steps.source.outputs.available == 'true'
         run: |
           libreoffice --headless --convert-to pdf --outdir rendered input/resume.docx
           test -s rendered/resume.pdf
 
       - name: Count rendered pages
+        if: steps.source.outputs.available == 'true'
         id: pages
         run: |
           pages=$(pdfinfo rendered/resume.pdf | awk '/^Pages:/ {print $2}')
@@ -58,17 +78,16 @@ jobs:
           echo "pages=$pages" >> "$GITHUB_OUTPUT"
 
       - name: Enforce one-page CV
+        if: steps.source.outputs.available == 'true'
         run: |
           if [ "${{ steps.pages.outputs.pages }}" -ne 1 ]; then
             echo "FAILED: rendered CV is ${{ steps.pages.outputs.pages }} pages; exactly 1 page is required."
             exit 1
           fi
+
           echo "PASS: rendered CV is exactly 1 page."
 
-      - name: Upload rendered PDF
+      - name: Cleanup private render files
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: rendered-resume
-          path: rendered/resume.pdf
-          if-no-files-found: warn
+        run: |
+          rm -f render-source.json input/resume.docx rendered/resume.pdf
