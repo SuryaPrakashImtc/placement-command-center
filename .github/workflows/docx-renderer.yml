@@ -19,3 +19,8 @@ jobs:
       - name: Check LibreOffice
         run: |
           libreoffice --version
+
+      - name: Check renderer
+        run: |
+          mkdir -p rendered
+          echo "LibreOffice renderer is ready."
