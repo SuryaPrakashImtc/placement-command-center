@@ -34,7 +34,7 @@ const RESUME_BUCKET_ID =
  * This is the actual current master CV filename.
  */
 const MASTER_CV_FILENAME =
-  "MASTER CV FP(6).docx";
+  "MASTER CV FP.docx";
 
 /*
  * Temporary content budget for the customized
