@@ -3,7 +3,7 @@ name: DOCX Renderer
 on:
   workflow_dispatch:
   schedule:
-    - cron: "*/5 * * * *"
+    - cron: "7,22,37,52 * * * *"
 
 permissions:
   id-token: write
