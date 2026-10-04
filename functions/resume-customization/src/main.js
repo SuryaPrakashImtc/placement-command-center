@@ -1,4 +1,5 @@
 import { Client, TablesDB, Query } from "node-appwrite";
+import { createRemoteJWKSet, jwtVerify } from "jose";
 
 /* =========================================================
    CONFIGURATION
@@ -52,6 +53,28 @@ const GEMINI_API_KEY =
 const GEMINI_MODEL =
   process.env.GEMINI_MODEL ||
   "gemini-3.8-flash";
+
+const GITHUB_OIDC_ISSUER =
+  "https://token.actions.githubusercontent.com";
+
+const GITHUB_OIDC_AUDIENCE =
+  process.env.GITHUB_OIDC_AUDIENCE ||
+  "placement-command-center-renderer";
+
+const GITHUB_REPOSITORY =
+  process.env.GITHUB_REPOSITORY ||
+  "SuryaPrakashImtc/placement-command-center";
+
+const GITHUB_WORKFLOW_REF =
+  process.env.GITHUB_WORKFLOW_REF ||
+  "SuryaPrakashImtc/placement-command-center/.github/workflows/docx-renderer.yml@refs/heads/main";
+
+const GITHUB_OIDC_JWKS =
+  createRemoteJWKSet(
+    new URL(
+      "https://token.actions.githubusercontent.com/.well-known/jwks"
+    )
+  );
 
 /*
  * Gemini can temporarily return 503/429/5xx errors.
@@ -1797,6 +1820,146 @@ function compactJobForGemini(
 
 
 /* =========================================================
+   GITHUB ACTIONS OIDC / RENDER SOURCE
+   ========================================================= */
+
+function getAuthorizationHeader(req) {
+  return (
+    req?.headers?.authorization ||
+    req?.headers?.Authorization ||
+    ""
+  );
+}
+
+async function verifyGitHubActionsIdentity(req) {
+  const authorization =
+    getAuthorizationHeader(req);
+
+  if (!authorization.startsWith("Bearer ")) {
+    throw new Error(
+      "RENDER_SOURCE_UNAUTHORIZED: missing GitHub OIDC bearer token"
+    );
+  }
+
+  const token =
+    authorization.slice("Bearer ".length).trim();
+
+  if (!token) {
+    throw new Error(
+      "RENDER_SOURCE_UNAUTHORIZED: empty GitHub OIDC token"
+    );
+  }
+
+  const { payload } =
+    await jwtVerify(
+      token,
+      GITHUB_OIDC_JWKS,
+      {
+        issuer:
+          GITHUB_OIDC_ISSUER,
+        audience:
+          GITHUB_OIDC_AUDIENCE
+      }
+    );
+
+  if (payload.repository !== GITHUB_REPOSITORY) {
+    throw new Error(
+      "RENDER_SOURCE_FORBIDDEN: GitHub repository does not match"
+    );
+  }
+
+  if (payload.workflow_ref !== GITHUB_WORKFLOW_REF) {
+    throw new Error(
+      "RENDER_SOURCE_FORBIDDEN: GitHub workflow does not match"
+    );
+  }
+
+  if (
+    payload.ref &&
+    payload.ref !== "refs/heads/main"
+  ) {
+    throw new Error(
+      "RENDER_SOURCE_FORBIDDEN: GitHub ref is not main"
+    );
+  }
+
+  return payload;
+}
+
+async function findLatestCustomizedCvFile() {
+  const files =
+    await listStorageFiles();
+
+  const candidates =
+    files.filter(
+      (file) => {
+        const name =
+          normalize(file.name);
+
+        return (
+          name.startsWith("CUSTOMIZED-") &&
+          name.toLowerCase().endsWith(".docx")
+        );
+      }
+    );
+
+  candidates.sort(
+    (a, b) => {
+      const aTime =
+        new Date(
+          a.$createdAt ||
+          a.createdAt ||
+          0
+        ).getTime();
+
+      const bTime =
+        new Date(
+          b.$createdAt ||
+          b.createdAt ||
+          0
+        ).getTime();
+
+      return bTime - aTime;
+    }
+  );
+
+  if (!candidates.length) {
+    throw new Error(
+      "RENDER_SOURCE_NOT_FOUND: no customized CV DOCX exists in the Resume Files bucket"
+    );
+  }
+
+  return candidates[0];
+}
+
+async function getRenderSource(req) {
+  await verifyGitHubActionsIdentity(req);
+
+  const file =
+    await findLatestCustomizedCvFile();
+
+  const buffer =
+    await downloadStorageFile(file.$id);
+
+  return {
+    status: "SUCCESS",
+    file: {
+      id: file.$id,
+      name: file.name,
+      created_at:
+        file.$createdAt ||
+        file.createdAt ||
+        null,
+      bytes: buffer.length
+    },
+    encoding: "base64",
+    content:
+      buffer.toString("base64")
+  };
+}
+
+
+/* =========================================================
    MAIN CUSTOMIZATION FLOW
    ========================================================= */
 
@@ -2186,12 +2349,30 @@ export default async function main({
   res
 }) {
   try {
+    if (req?.path === "/render-source") {
+      if (
+        String(req?.method || "GET").toUpperCase() !==
+        "GET"
+      ) {
+        return res.json(
+          {
+            status: "FAILED",
+            error: "METHOD_NOT_ALLOWED"
+          },
+          405
+        );
+      }
+
+      const result =
+        await getRenderSource(req);
+
+      return res.json(result);
+    }
+
     const result =
       await customizeResume();
 
-    return res.json(
-      result
-    );
+    return res.json(result);
 
   } catch (error) {
     console.error(
@@ -2199,16 +2380,27 @@ export default async function main({
       error
     );
 
+    const message =
+      error?.message ??
+      String(error);
+
+    const status =
+      message.startsWith(
+        "RENDER_SOURCE_UNAUTHORIZED"
+      )
+        ? 401
+        : message.startsWith(
+            "RENDER_SOURCE_FORBIDDEN"
+          )
+          ? 403
+          : 500;
+
     return res.json(
       {
-        status:
-          "FAILED",
-
-        error:
-          error?.message ??
-          String(error)
+        status: "FAILED",
+        error: message
       },
-      500
+      status
     );
   }
 }
