@@ -2,6 +2,11 @@ name: DOCX Renderer
 
 on:
   workflow_dispatch:
+    inputs:
+      docx_url:
+        description: "Temporary/signed URL to the DOCX to validate"
+        required: true
+        type: string
 
 jobs:
   render:
@@ -11,16 +16,46 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install LibreOffice
+      - name: Install LibreOffice and PDF tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y libreoffice
+          sudo apt-get install -y libreoffice poppler-utils
 
-      - name: Check LibreOffice
+      - name: Download DOCX
+        env:
+          DOCX_URL: ${{ inputs.docx_url }}
         run: |
-          libreoffice --version
+          test -n "$DOCX_URL"
+          mkdir -p input rendered
+          curl --fail --location --retry 3 --retry-all-errors "$DOCX_URL" -o input/resume.docx
+          file input/resume.docx
+          test -s input/resume.docx
 
-      - name: Check renderer
+      - name: Render DOCX to PDF
         run: |
-          mkdir -p rendered
-          echo "LibreOffice renderer is ready."
+          libreoffice --headless --convert-to pdf --outdir rendered input/resume.docx
+          test -s rendered/resume.pdf
+
+      - name: Count rendered pages
+        id: pages
+        run: |
+          pages=$(pdfinfo rendered/resume.pdf | awk '/^Pages:/ {print $2}')
+          echo "Rendered pages: $pages"
+          test -n "$pages"
+          echo "pages=$pages" >> "$GITHUB_OUTPUT"
+
+      - name: Enforce one-page CV
+        run: |
+          if [ "${{ steps.pages.outputs.pages }}" -ne 1 ]; then
+            echo "FAILED: rendered CV is ${{ steps.pages.outputs.pages }} pages; exactly 1 page is required."
+            exit 1
+          fi
+          echo "PASS: rendered CV is exactly 1 page."
+
+      - name: Upload rendered PDF
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rendered-resume
+          path: rendered/resume.pdf
+          if-no-files-found: warn
