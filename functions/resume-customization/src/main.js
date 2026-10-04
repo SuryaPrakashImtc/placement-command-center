@@ -53,6 +53,35 @@ const GEMINI_MODEL =
   process.env.GEMINI_MODEL ||
   "gemini-3.8-flash";
 
+/*
+ * Gemini can temporarily return 503/429/5xx errors.
+ *
+ * We retry only transient errors.
+ *
+ * 3 retries means up to 4 total Gemini attempts:
+ *
+ * Attempt 1
+ * wait ~1.5 sec
+ * Attempt 2
+ * wait ~3 sec
+ * Attempt 3
+ * wait ~6 sec
+ * Attempt 4
+ */
+const GEMINI_MAX_RETRIES = 3;
+const GEMINI_RETRY_BASE_MS = 1500;
+const GEMINI_RETRY_JITTER_MS = 500;
+
+const GEMINI_RETRYABLE_STATUS_CODES =
+  new Set([
+    408,
+    429,
+    500,
+    502,
+    503,
+    504
+  ]);
+
 
 /* =========================================================
    CANDIDATE TRUTH BASE
@@ -195,6 +224,12 @@ function decodeXml(value) {
     .replace(/&quot;/g, '"')
     .replace(/&apos;/g, "'")
     .replace(/&amp;/g, "&");
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 
@@ -411,9 +446,6 @@ async function findMasterCvFile() {
   const files =
     await listStorageFiles();
 
-  /*
-   * Exact filename match.
-   */
   const exactMatch =
     files.find(
       (file) =>
@@ -425,9 +457,6 @@ async function findMasterCvFile() {
     return exactMatch;
   }
 
-  /*
-   * Case-insensitive fallback.
-   */
   const normalizedTarget =
     normalize(
       MASTER_CV_FILENAME
@@ -446,13 +475,6 @@ async function findMasterCvFile() {
     return fallback;
   }
 
-  /*
-   * Helpful error showing the filenames actually
-   * present in the bucket.
-   *
-   * This prevents us from blindly guessing the filename
-   * in the future.
-   */
   const availableFiles =
     files
       .map(
@@ -567,7 +589,16 @@ async function readDocxXml(
   };
 }
 
-async function writeDocxXml(
+/*
+ * IMPORTANT:
+ * This function now returns the JSZip object.
+ *
+ * The previous implementation generated a Buffer here
+ * and the main flow then tried to call generateAsync()
+ * on that Buffer. That would have caused a failure after
+ * Gemini succeeded.
+ */
+async function prepareDocxZip(
   zip,
   documentXml
 ) {
@@ -613,10 +644,7 @@ async function writeDocxXml(
     );
   }
 
-  return zip.generateAsync({
-    type: "nodebuffer",
-    compression: "DEFLATE"
-  });
+  return zip;
 }
 
 
@@ -633,87 +661,209 @@ async function callGemini(
   );
 
   const url =
-    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${encodeURIComponent(
-      GEMINI_API_KEY
-    )}`;
+    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
+      GEMINI_MODEL
+    )}:generateContent`;
 
-  const response =
-    await fetch(
-      url,
-      {
-        method: "POST",
+  let lastStatus = null;
+  let lastErrorText = "";
 
-        headers: {
-          "Content-Type":
-            "application/json"
-        },
+  for (
+    let attempt = 0;
+    attempt <= GEMINI_MAX_RETRIES;
+    attempt++
+  ) {
+    try {
+      const response =
+        await fetch(
+          url,
+          {
+            method: "POST",
 
-        body: JSON.stringify({
-          contents: [
-            {
-              role: "user",
+            headers: {
+              "Content-Type":
+                "application/json",
 
-              parts: [
+              /*
+               * Keep the API key out of the URL.
+               */
+              "x-goog-api-key":
+                GEMINI_API_KEY
+            },
+
+            body: JSON.stringify({
+              contents: [
                 {
-                  text: prompt
+                  role: "user",
+
+                  parts: [
+                    {
+                      text: prompt
+                    }
+                  ]
                 }
-              ]
-            }
-          ],
+              ],
 
-          generationConfig: {
-            temperature: 0.1,
-            responseMimeType:
-              "application/json"
+              generationConfig: {
+                temperature: 0.1,
+                responseMimeType:
+                  "application/json"
+              }
+            })
           }
-        })
+        );
+
+      if (response.ok) {
+        const data =
+          await response.json();
+
+        const text =
+          data?.candidates?.[0]
+            ?.content?.parts?.[0]
+            ?.text;
+
+        if (!text) {
+          throw new Error(
+            "GEMINI_EMPTY_RESPONSE"
+          );
+        }
+
+        try {
+          return JSON.parse(
+            text
+          );
+        } catch {
+          const cleaned =
+            text
+              .replace(
+                /^```json\s*/i,
+                ""
+              )
+              .replace(
+                /\s*```$/i,
+                ""
+              )
+              .trim();
+
+          return JSON.parse(
+            cleaned
+          );
+        }
       }
-    );
 
-  if (!response.ok) {
-    const errorText =
-      await response.text();
+      lastStatus =
+        response.status;
 
-    throw new Error(
-      `GEMINI_${response.status}: ${errorText}`
-    );
-  }
+      lastErrorText =
+        await response.text();
 
-  const data =
-    await response.json();
+      const shouldRetry =
+        GEMINI_RETRYABLE_STATUS_CODES.has(
+          response.status
+        );
 
-  const text =
-    data?.candidates?.[0]
-      ?.content?.parts?.[0]
-      ?.text;
+      const finalAttempt =
+        attempt >=
+        GEMINI_MAX_RETRIES;
 
-  if (!text) {
-    throw new Error(
-      "GEMINI_EMPTY_RESPONSE"
-    );
-  }
+      if (
+        !shouldRetry ||
+        finalAttempt
+      ) {
+        throw new Error(
+          `GEMINI_${response.status}_AFTER_${attempt + 1}_ATTEMPTS: ${lastErrorText}`
+        );
+      }
 
-  try {
-    return JSON.parse(
-      text
-    );
-  } catch {
-    const cleaned =
-      text
-        .replace(
-          /^```json\s*/i,
-          ""
+      /*
+       * Exponential backoff:
+       *
+       * retry 1 ≈ 1.5 sec
+       * retry 2 ≈ 3 sec
+       * retry 3 ≈ 6 sec
+       *
+       * Plus small random jitter.
+       */
+      const backoff =
+        GEMINI_RETRY_BASE_MS *
+        Math.pow(
+          2,
+          attempt
+        );
+
+      const jitter =
+        Math.floor(
+          Math.random() *
+          GEMINI_RETRY_JITTER_MS
+        );
+
+      const waitMs =
+        backoff + jitter;
+
+      console.warn(
+        `GEMINI_RETRY: status=${response.status}, attempt=${attempt + 1}/${GEMINI_MAX_RETRIES + 1}, waiting=${waitMs}ms`
+      );
+
+      await sleep(
+        waitMs
+      );
+
+    } catch (error) {
+      /*
+       * Do not retry our own final Gemini errors.
+       */
+      if (
+        String(
+          error?.message || ""
+        ).startsWith(
+          "GEMINI_"
         )
-        .replace(
-          /\s*```$/i,
-          ""
-        )
-        .trim();
+      ) {
+        throw error;
+      }
 
-    return JSON.parse(
-      cleaned
-    );
+      /*
+       * Network/fetch failure.
+       * Retry while attempts remain.
+       */
+      if (
+        attempt >=
+        GEMINI_MAX_RETRIES
+      ) {
+        throw new Error(
+          `GEMINI_NETWORK_ERROR_AFTER_${attempt + 1}_ATTEMPTS: ${error?.message ?? String(error)}`
+        );
+      }
+
+      const backoff =
+        GEMINI_RETRY_BASE_MS *
+        Math.pow(
+          2,
+          attempt
+        );
+
+      const jitter =
+        Math.floor(
+          Math.random() *
+          GEMINI_RETRY_JITTER_MS
+        );
+
+      const waitMs =
+        backoff + jitter;
+
+      console.warn(
+        `GEMINI_NETWORK_RETRY: attempt=${attempt + 1}/${GEMINI_MAX_RETRIES + 1}, waiting=${waitMs}ms, error=${error?.message ?? String(error)}`
+      );
+
+      await sleep(
+        waitMs
+      );
+    }
   }
+
+  throw new Error(
+    `GEMINI_${lastStatus || "UNKNOWN"}_FAILED: ${lastErrorText}`
+  );
 }
 
 
@@ -1436,58 +1586,6 @@ function deterministicTrim(
 
 
 /* =========================================================
-   DOCUMENT PROPERTIES
-   ========================================================= */
-
-async function updateDocumentProperties(
-  zip
-) {
-  const entry =
-    zip.file(
-      "docProps/app.xml"
-    );
-
-  if (!entry) {
-    return;
-  }
-
-  let xml =
-    await entry.async(
-      "string"
-    );
-
-  /*
-   * Metadata only.
-   *
-   * IMPORTANT:
-   * This does NOT prove the document is one page.
-   */
-  xml =
-    xml.replace(
-      /<Pages>[\s\S]*?<\/Pages>/,
-      "<Pages>1</Pages>"
-    );
-
-  if (
-    !xml.includes(
-      "<Pages>"
-    )
-  ) {
-    xml =
-      xml.replace(
-        "</Properties>",
-        "<Pages>1</Pages></Properties>"
-      );
-  }
-
-  zip.file(
-    "docProps/app.xml",
-    xml
-  );
-}
-
-
-/* =========================================================
    APPWRITE TABLESDB
    ========================================================= */
 
@@ -1907,26 +2005,20 @@ async function customizeResume() {
    * -------------------------------------------------------
    */
 
-  let outputZip =
-    await writeDocxXml(
+  const outputZip =
+    await prepareDocxZip(
       zip,
       customizedXml
     );
 
   /*
    * -------------------------------------------------------
-   * 14. Update document metadata
+   * 14. Generate final DOCX
    * -------------------------------------------------------
-   */
-
-  await updateDocumentProperties(
-    outputZip
-  );
-
-  /*
-   * -------------------------------------------------------
-   * 15. Generate final DOCX
-   * -------------------------------------------------------
+   *
+   * IMPORTANT:
+   * We intentionally do NOT modify docProps/app.xml to
+   * falsely claim that the document has one page.
    */
 
   const finalBuffer =
@@ -1940,7 +2032,7 @@ async function customizeResume() {
 
   /*
    * -------------------------------------------------------
-   * 16. Generate output filename
+   * 15. Generate output filename
    * -------------------------------------------------------
    */
 
@@ -1995,7 +2087,7 @@ async function customizeResume() {
 
   /*
    * -------------------------------------------------------
-   * 17. Upload customized copy
+   * 16. Upload customized copy
    * -------------------------------------------------------
    *
    * NEVER overwrite master CV.
@@ -2009,7 +2101,7 @@ async function customizeResume() {
 
   /*
    * -------------------------------------------------------
-   * 18. Return result
+   * 17. Return result
    * -------------------------------------------------------
    */
 
@@ -2100,6 +2192,7 @@ export default async function main({
     return res.json(
       result
     );
+
   } catch (error) {
     console.error(
       "RESUME_CUSTOMIZATION_ERROR",
