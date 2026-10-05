@@ -370,32 +370,6 @@ export default async ({ req, res, log, error }) => {
       return null;
     }
 
-    function clearlyTooExperienced(job) {
-      const text = normalize([
-        job.job_title,
-        job.experience_required
-      ].join(' '));
-
-      // Clearly senior requirements.
-      const seniorPatterns = [
-        /\b3\+?\s*years?\b/,
-        /\b4\+?\s*years?\b/,
-        /\b5\+?\s*years?\b/,
-        /\b6\+?\s*years?\b/,
-        /\b7\+?\s*years?\b/,
-        /\b8\+?\s*years?\b/,
-        /\b9\+?\s*years?\b/,
-        /\b10\+?\s*years?\b/,
-        /\b3\s*-\s*\d+\s*years?\b/,
-        /\b4\s*-\s*\d+\s*years?\b/,
-        /\b5\s*-\s*\d+\s*years?\b/
-      ];
-
-      return seniorPatterns.some(pattern =>
-        pattern.test(text)
-      );
-    }
-
     function evaluateJob(job) {
       if (!isRelevantJob(job)) {
         return 'NOT_ELIGIBLE';
