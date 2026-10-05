@@ -403,6 +403,17 @@ export default async ({ req, res, error }) => {
       );
     }
 
+    const sourceCounts =
+      countBy(
+        jobs,
+        job =>
+          normalize(
+            job.source_platform ||
+            job.source ||
+            "UNKNOWN"
+          )
+      );
+
     const eligibleJobs =
       jobs.filter(isEligible);
 
@@ -487,6 +498,18 @@ export default async ({ req, res, error }) => {
             )
           )
         );
+
+    const allJobs =
+      jobs.map(job =>
+        compactJob(
+          job,
+          Boolean(
+            cvReadyByJob.get(
+              job.$id
+            )
+          )
+        )
+      );
 
     const applicationQueue =
       jobs
@@ -583,6 +606,9 @@ export default async ({ req, res, error }) => {
           submittedJobs.length
       },
 
+      source_counts:
+        sourceCounts,
+
       application_statuses:
         applicationStatuses,
 
@@ -623,6 +649,9 @@ export default async ({ req, res, error }) => {
 
       recent_jobs:
         recentJobs,
+
+      all_jobs:
+        allJobs,
 
       applications:
         applicationQueue,
