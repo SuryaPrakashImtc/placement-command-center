@@ -255,7 +255,7 @@ function findCustomizedCv(files, job) {
   return candidates[0] || null;
 }
 
-function selectBestJob(jobs) {
+function selectBestJob(jobs, files = []) {
   const candidates = jobs.filter((job) => {
     const status = applicationStatus(job);
 
@@ -263,7 +263,8 @@ function selectBestJob(jobs) {
       isEligible(job) &&
       !TERMINAL_APPLICATION_STATUSES.has(status) &&
       status === "NOT_APPLIED" &&
-      Boolean(jobUrl(job))
+      Boolean(jobUrl(job)) &&
+      Boolean(findCustomizedCv(files, job))
     );
   });
 
@@ -326,6 +327,7 @@ function buildApplicationPackage(job, cvFile, status = "READY_FOR_APPROVAL") {
 
 async function prepareApplication(tablesDB, storage, request) {
   const jobs = await getJobs(tablesDB);
+  const files = await listResumeFiles(storage);
 
   let job;
 
@@ -341,7 +343,7 @@ async function prepareApplication(tablesDB, storage, request) {
       );
     }
   } else {
-    job = selectBestJob(jobs);
+    job = selectBestJob(jobs, files);
   }
 
   if (!job) {
@@ -375,7 +377,6 @@ async function prepareApplication(tablesDB, storage, request) {
     };
   }
 
-  const files = await listResumeFiles(storage);
   const cvFile = findCustomizedCv(files, job);
 
   if (!cvFile) {
