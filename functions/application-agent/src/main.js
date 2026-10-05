@@ -26,6 +26,16 @@ const RESUME_BUCKET_ID =
 
 const FINAL_CV_PREFIX = "CUSTOMIZED-";
 
+const TINYFISH_API_KEY =
+  process.env.TINYFISH_API_KEY;
+
+const TINYFISH_RUN_URL =
+  "https://agent.tinyfish.ai/v1/automation/run-async";
+
+const TINYFISH_WEBHOOK_URL =
+  process.env.TINYFISH_WEBHOOK_URL ||
+  "https://placement-command-center-onq5.sgp.appwrite.run";
+
 const TERMINAL_APPLICATION_STATUSES = new Set([
   "APPLIED",
   "SUBMITTED",
@@ -35,6 +45,9 @@ const TERMINAL_APPLICATION_STATUSES = new Set([
 
 const HUMAN_INTERVENTION_STATUS =
   "HUMAN_INTERVENTION_REQUIRED";
+
+const BROWSER_RUNNING_STATUS =
+  "BROWSER_RUNNING";
 
 function requireEnv(name, value) {
   if (!value) {
@@ -398,6 +411,75 @@ async function prepareApplication(tablesDB, storage, request) {
   );
 }
 
+async function launchTinyFishApplication(job, cvFile) {
+  requireEnv(
+    "TINYFISH_API_KEY",
+    TINYFISH_API_KEY
+  );
+
+  const payload = {
+    url: jobUrl(job),
+    goal:
+      "JOB_ID=" +
+      job.$id +
+      " Complete the job application workflow for " +
+      companyName(job) +
+      " — " +
+      jobTitle(job) +
+      ". Use only verified candidate information available in the application context. Upload the customized CV file named " +
+      cvFile.name +
+      " when the form asks for a resume. Fill all ordinary non-final application fields you can complete safely. STOP before any final Submit, Send, Apply, or equivalent final-submission control. NEVER submit the application. If a CAPTCHA, Cloudflare/Turnstile, reCAPTCHA, hCaptcha, human-verification step, login/sign-in requirement, OTP, phone/email verification, or any other security gate blocks progress, STOP immediately and report that HUMAN_INTERVENTION_REQUIRED. Do not bypass security challenges.",
+    webhook_url:
+      TINYFISH_WEBHOOK_URL,
+    browser_profile:
+      "stealth"
+  };
+
+  const response =
+    await fetch(
+      TINYFISH_RUN_URL,
+      {
+        method: "POST",
+        headers: {
+          "X-API-Key":
+            TINYFISH_API_KEY,
+          "Content-Type":
+            "application/json"
+        },
+        body:
+          JSON.stringify(payload)
+      }
+    );
+
+  const text =
+    await response.text();
+
+  let data;
+
+  try {
+    data = JSON.parse(text);
+  } catch {
+    data = {
+      raw: text
+    };
+  }
+
+  if (!response.ok) {
+    throw new Error(
+      "TINYFISH_RUN_FAILED_" +
+      response.status +
+      ": " +
+      normalize(
+        data?.error?.message ||
+        data?.message ||
+        text
+      )
+    );
+  }
+
+  return data;
+}
+
 async function approveApplication(tablesDB, storage, request) {
   const jobId = normalize(request.jobId);
 
@@ -450,11 +532,43 @@ async function approveApplication(tablesDB, storage, request) {
   const updated = await updateApplicationStatus(
     tablesDB,
     jobId,
-    "APPROVED_FOR_SUBMISSION"
+    BROWSER_RUNNING_STATUS
   );
 
+  let browserRun;
+
+  try {
+    browserRun =
+      await launchTinyFishApplication(
+        updated,
+        cvFile
+      );
+  } catch (launchError) {
+    await updateApplicationStatus(
+      tablesDB,
+      jobId,
+      "BROWSER_LAUNCH_FAILED"
+    );
+
+    return {
+      status:
+        "BROWSER_LAUNCH_FAILED",
+      job_id:
+        jobId,
+      company:
+        companyName(job),
+      job_title:
+        jobTitle(job),
+      job_url:
+        jobUrl(job),
+      error:
+        launchError?.message ||
+        String(launchError)
+    };
+  }
+
   return {
-    status: "APPROVED_FOR_SUBMISSION",
+    status: BROWSER_RUNNING_STATUS,
     job_id: updated.$id,
     company: companyName(updated),
     job_title: jobTitle(updated),
@@ -468,6 +582,13 @@ async function approveApplication(tablesDB, storage, request) {
     browser_task: {
       action: "OPEN_AND_COMPLETE_APPLICATION",
       job_id: updated.$id,
+      run_id:
+        browserRun?.run_id ||
+        browserRun?.id ||
+        null,
+      status:
+        browserRun?.status ||
+        "PENDING",
       url: jobUrl(updated),
       upload_cv_file_id: cvFile.$id,
       upload_cv_file_name: cvFile.name,
