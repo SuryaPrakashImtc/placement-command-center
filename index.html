@@ -269,7 +269,7 @@ function saveConfig(){
   setConnection(false,"Saved. Refreshing…");
   refreshDashboard();
 }
-function clearConfig(){localStorage.removeItem(CONFIG_KEYS.dashboard);localStorage.removeItem(CONFIG_KEYS.application);document.getElementById("dashboard-api-url").value="";document.getElementById("application-agent-url").value="";setConnection(false,"Backend not connected")}
+function clearConfig(){localStorage.removeItem(CONFIG_KEYS.dashboard);localStorage.removeItem(CONFIG_KEYS.application);localStorage.removeItem(CONFIG_KEYS.resume);document.getElementById("dashboard-api-url").value="";document.getElementById("application-agent-url").value="";document.getElementById("resume-agent-url").value="";setConnection(false,"Backend not connected")}
 function setConnection(ok,text){document.getElementById("connection-dot").className="dot"+(ok?" ok":"");document.getElementById("connection-text").textContent=text}
 function esc(v){return String(v??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#039;"}[c]))}
 function tag(text,kind){return text?'<span class="tag '+kind+'">'+esc(text)+'</span>':""}
@@ -603,7 +603,11 @@ function openJob(url){if(url)window.open(url,"_blank","noopener")}
 function showPage(name){
   document.querySelectorAll(".page").forEach(x=>x.classList.remove("active"));
   document.getElementById("page-"+name).classList.add("active");
-  
+  document.querySelectorAll(".nav-item").forEach(x=>x.classList.toggle("active",x.dataset.page===name));
+  document.getElementById("page-title").textContent=PAGE_COPY[name][0];
+  document.getElementById("page-subtitle").textContent=PAGE_COPY[name][1];
+}
+
 document.addEventListener("click",event=>{
   const btn=event.target.closest("[data-action]");
   if(!btn)return;
@@ -616,10 +620,6 @@ document.addEventListener("click",event=>{
   else if(action==="final-confirm")finalConfirm(jobId);
 });
 
-document.querySelectorAll(".nav-item").forEach(x=>x.classList.toggle("active",x.dataset.page===name));
-  document.getElementById("page-title").textContent=PAGE_COPY[name][0];
-  document.getElementById("page-subtitle").textContent=PAGE_COPY[name][1];
-}
 document.querySelectorAll(".nav-item").forEach(x=>x.addEventListener("click",()=>showPage(x.dataset.page)));
 refreshDashboard();
 </script>
