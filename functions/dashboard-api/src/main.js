@@ -354,6 +354,23 @@ function parseCustomizedCvName(name) {
 }
 
 function compactOpportunity(row) {
+  let people = {};
+
+  try {
+    people =
+      JSON.parse(
+        row.people_intelligence ||
+        '{}'
+      ) || {};
+  } catch {
+    people = {};
+  }
+
+  const primary =
+    people.primary ||
+    people.secondary ||
+    null;
+
   return {
     id: row.$id,
     company:
@@ -365,24 +382,30 @@ function compactOpportunity(row) {
         row.proactive_score ??
         row.opportunity_score
       ),
-    status:
-      normalize(
-        row.proactive_status ??
-        row.opportunity_status
-      ),
     signal_type:
       normalize(row.signal_type),
     outreach_angle:
       normalize(
         row.recommended_outreach_angle
       ),
-    approval_status:
-      normalize(row.approval_status),
-    outreach_status:
-      normalize(row.outreach_status),
-    next_check_date:
-      row.next_check_date ||
-      null
+    contact_name:
+      normalize(
+        primary?.name
+      ),
+    contact_title:
+      normalize(
+        primary?.title
+      ),
+    contact_role_type:
+      normalize(
+        primary?.roleType
+      ),
+    contact_url:
+      normalize(
+        primary?.profileUrl
+      ),
+    contact_found:
+      Boolean(primary)
   };
 }
 
