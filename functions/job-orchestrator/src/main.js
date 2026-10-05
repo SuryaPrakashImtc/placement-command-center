@@ -16,16 +16,37 @@ export default async ({ req, res, log, error }) => {
     // HELPERS
     // =======================================================
 
-    async function jobExists(sourceJobId) {
-      const existing = await tablesDB.listRows({
-        databaseId: '6aa03d1800119759c9bb',
-        tableId: 'jobs',
+    const existingSourceJobIds =
+      new Set();
+
+    const existingRows =
+      await tablesDB.listRows({
+        databaseId:
+          '6aa03d1800119759c9bb',
+        tableId:
+          'jobs',
         queries: [
-          Query.equal('source_job_id', sourceJobId)
+          Query.limit(100)
         ]
       });
 
-      return existing.rows.length > 0;
+    for (
+      const row
+      of existingRows.rows || []
+    ) {
+      if (row.source_job_id) {
+        existingSourceJobIds.add(
+          String(
+            row.source_job_id
+          )
+        );
+      }
+    }
+
+    function jobExists(sourceJobId) {
+      return existingSourceJobIds.has(
+        String(sourceJobId)
+      );
     }
 
     // =======================================================
