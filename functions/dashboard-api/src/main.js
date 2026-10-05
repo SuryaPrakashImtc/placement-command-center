@@ -34,7 +34,7 @@ const PENDING_CV_PREFIX =
   "PENDING-CUSTOMIZED-";
 
 const DASHBOARD_ORIGIN =
-  "https://suryaprakashmtc.github.io";
+  "https://suryaprakashimtc.github.io";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin":
