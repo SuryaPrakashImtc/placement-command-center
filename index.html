@@ -491,6 +491,7 @@ function renderJobs(){
   if(f==="high")arr=arr.filter(j=>String(j.match_status).toLowerCase()==="high_match"||Number(j.match_score)>=80);
   if(f==="priority")arr=arr.filter(j=>String(j.opportunity_status).toLowerCase()==="priority");
   if(f==="ready")arr=arr.filter(j=>j.customized_cv_ready);
+  if(f==="unknown")arr=arr.filter(j=>String(j.eligibility_status).toUpperCase()==="UNKNOWN");
   if(f==="not_applied")arr=arr.filter(j=>String(j.application_status).toUpperCase()==="NOT_APPLIED");
   const sort=document.getElementById("job-sort")?.value||"best";
   if(sort==="newest")arr.sort((a,b)=>String(b.posted_at||"").localeCompare(String(a.posted_at||"")));
