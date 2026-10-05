@@ -524,7 +524,7 @@ export default async ({ req, res, log, error }) => {
 
         if (!response.ok) {
           throw new Error(
-            \`Remote OK API returned \${response.status} for \${tag}\`
+            `Remote OK API returned ${response.status} for ${tag}`
           );
         }
 
@@ -576,7 +576,7 @@ export default async ({ req, res, log, error }) => {
           if (!relevant) continue;
 
           const sourceJobId =
-            \`REMOTEOK_\${String(job.id)}\`;
+            `REMOTEOK_${String(job.id)}`;
 
           if (
             seenRemoteOkJobs.has(
@@ -732,7 +732,7 @@ export default async ({ req, res, log, error }) => {
         'PARTIAL_SUCCESS';
 
       error(
-        \`Remote OK: \${remoteOkError.message}\`
+        `Remote OK: ${remoteOkError.message}`
       );
     }
 
@@ -750,7 +750,7 @@ export default async ({ req, res, log, error }) => {
       const match =
         xml.match(
           new RegExp(
-            \`<\${tagName}[^>]*>([\\\\s\\\\S]*?)</\${tagName}>\`,
+            `<${tagName}[^>]*>([\\\\s\\\\S]*?)</${tagName}>`,
             'i'
           )
         );
@@ -807,7 +807,7 @@ export default async ({ req, res, log, error }) => {
 
       if (!response.ok) {
         throw new Error(
-          \`We Work Remotely RSS returned \${response.status}\`
+          `We Work Remotely RSS returned ${response.status}`
         );
       }
 
@@ -1016,7 +1016,7 @@ export default async ({ req, res, log, error }) => {
         'PARTIAL_SUCCESS';
 
       error(
-        \`We Work Remotely: \${wwrError.message}\`
+        `We Work Remotely: ${wwrError.message}`
       );
     }
 
@@ -1044,7 +1044,7 @@ export default async ({ req, res, log, error }) => {
 
       if (!response.ok) {
         throw new Error(
-          \`Remote Landers API returned \${response.status}\`
+          `Remote Landers API returned ${response.status}`
         );
       }
 
@@ -1235,7 +1235,7 @@ export default async ({ req, res, log, error }) => {
         'PARTIAL_SUCCESS';
 
       error(
-        \`Remote Landers: \${remoteLandersError.message}\`
+        `Remote Landers: ${remoteLandersError.message}`
       );
     }
 
