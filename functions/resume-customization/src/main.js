@@ -39,6 +39,9 @@ const FINAL_CV_PREFIX =
 
 const SAFE_PAGE_RATIO = 0.95;
 
+const MAX_CUSTOMIZATIONS_PER_24H =
+  10;
+
 /*
  * IMPORTANT:
  * This is the actual current master CV filename.
@@ -1743,6 +1746,114 @@ function jobOutputFingerprint(
     .toLowerCase();
 }
 
+function hasRecentCustomization(
+  files
+) {
+  const cutoff =
+    Date.now() -
+    24 * 60 * 60 * 1000;
+
+  return files.some(
+    (file) => {
+      const name =
+        normalize(
+          file.name
+        ).toLowerCase();
+
+      if (
+        !(
+          name.startsWith(
+            PENDING_CV_PREFIX.toLowerCase()
+          ) ||
+          name.startsWith(
+            FINAL_CV_PREFIX.toLowerCase()
+          )
+        )
+      ) {
+        return false;
+      }
+
+      const createdAt =
+        new Date(
+          file.$createdAt ||
+          file.createdAt ||
+          0
+        ).getTime();
+
+      return (
+        Number.isFinite(
+          createdAt
+        ) &&
+        createdAt >=
+          cutoff
+      );
+    }
+  );
+}
+
+function recentCustomizationCount(
+  files
+) {
+  const cutoff =
+    Date.now() -
+    24 * 60 * 60 * 1000;
+
+  return files.filter(
+    (file) => {
+      const name =
+        normalize(
+          file.name
+        ).toLowerCase();
+
+      if (
+        !(
+          name.startsWith(
+            PENDING_CV_PREFIX.toLowerCase()
+          ) ||
+          name.startsWith(
+            FINAL_CV_PREFIX.toLowerCase()
+          )
+        )
+      ) {
+        return false;
+      }
+
+      const createdAt =
+        new Date(
+          file.$createdAt ||
+          file.createdAt ||
+          0
+        ).getTime();
+
+      return (
+        Number.isFinite(
+          createdAt
+        ) &&
+        createdAt >=
+          cutoff
+      );
+    }
+  ).length;
+}
+
+function hasPendingCustomization(
+  files
+) {
+  return files.some(
+    (file) =>
+      normalize(
+        file.name
+      ).startsWith(
+        PENDING_CV_PREFIX
+      ) &&
+      normalize(
+        file.name
+      ).toLowerCase().endsWith(
+        ".docx"
+      )
+  );
+}
+
 function isJobAlreadyCustomized(
   job,
   files
@@ -2306,9 +2417,48 @@ async function customizeResume(req) {
   const jobs =
     await getJobs();
 
+  const storageFiles =
+    await listStorageFiles();
+
   /*
    * -------------------------------------------------------
-   * 2. Select exact job when requested,
+   * 2. Safety guards before any Gemini call.
+   * -------------------------------------------------------
+   */
+
+  if (
+    hasPendingCustomization(
+      storageFiles
+    )
+  ) {
+    return {
+      status:
+        "PENDING_RENDER_VALIDATION",
+      message:
+        "A customized CV is already waiting for render validation."
+    };
+  }
+
+  const recentCount =
+    recentCustomizationCount(
+      storageFiles
+    );
+
+  if (
+    recentCount >=
+    MAX_CUSTOMIZATIONS_PER_24H
+  ) {
+    return {
+      status:
+        "CUSTOMIZATION_RATE_LIMITED",
+      message:
+        "The free-tier Gemini safety limit has been reached for the last 24 hours. No additional customization was attempted."
+    };
+  }
+
+  /*
+   * -------------------------------------------------------
+   * 3. Select exact job when requested,
    *    otherwise select the best available job.
    * -------------------------------------------------------
    */
@@ -2353,7 +2503,7 @@ async function customizeResume(req) {
     job =
       selectBestJob(
         jobs,
-        await listStorageFiles()
+        storageFiles
       );
   }
 
