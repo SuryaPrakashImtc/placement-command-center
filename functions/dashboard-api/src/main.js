@@ -33,6 +33,28 @@ const FINAL_CV_PREFIX =
 const PENDING_CV_PREFIX =
   "PENDING-CUSTOMIZED-";
 
+const DASHBOARD_ORIGIN =
+  "https://suryaprakashmtc.github.io";
+
+const CORS_HEADERS = {
+  "Access-Control-Allow-Origin":
+    DASHBOARD_ORIGIN,
+  "Access-Control-Allow-Methods":
+    "GET, POST, OPTIONS",
+  "Access-Control-Allow-Headers":
+    "Content-Type, Authorization",
+  "Vary":
+    "Origin"
+};
+
+function respond(res, data, status = 200) {
+  return res.json(
+    data,
+    status,
+    CORS_HEADERS
+  );
+}
+
 function normalize(value) {
   return String(value ?? "")
     .replace(/\s+/g, " ")
@@ -323,6 +345,10 @@ function countBy(rows, fn) {
 
 export default async ({ req, res, error }) => {
   try {
+    if (String(req?.method || "").toUpperCase() === "OPTIONS") {
+      return res.text("", 204, CORS_HEADERS);
+    }
+
     if (!APPWRITE_API_KEY) {
       throw new Error(
         "JOB_AUTOMATION_API_KEY is missing."
@@ -528,7 +554,7 @@ export default async ({ req, res, error }) => {
         .slice(0, 12)
         .map(compactOpportunity);
 
-    return res.json({
+    return respond(res, {
       status:
         "SUCCESS",
       generated_at:
@@ -616,7 +642,7 @@ export default async ({ req, res, error }) => {
       String(err)
     );
 
-    return res.json(
+    return respond(res,
       {
         status: "FAILED",
         error:
