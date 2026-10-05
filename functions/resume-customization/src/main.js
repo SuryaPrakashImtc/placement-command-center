@@ -59,9 +59,15 @@ const MAX_ONE_PAGE_CHARS = 3000;
 const GEMINI_API_KEY =
   process.env.GEMINI_API_KEY;
 
+const configuredGeminiModel =
+  process.env.GEMINI_MODEL;
+
 const GEMINI_MODEL =
-  process.env.GEMINI_MODEL ||
-  "gemini-3.8-flash";
+  configuredGeminiModel &&
+  configuredGeminiModel !==
+    "gemini-3.8-flash"
+    ? configuredGeminiModel
+    : "gemini-3.1-flash-lite";
 
 const GITHUB_OIDC_ISSUER =
   "https://token.actions.githubusercontent.com";
