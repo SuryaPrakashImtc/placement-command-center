@@ -212,6 +212,62 @@ function determineSeniority(jobText) {
   return 'UNKNOWN';
 }
 
+function technicalBurden(job) {
+  const title = normalize(job.job_title);
+  const text = normalize([
+    job.job_title,
+    job.job_description,
+    job.department,
+    job.function,
+    job.industry,
+    job.experience_required,
+    job.education_required
+  ].join(' '));
+
+  const hardTechnicalSkills = [
+    'python',
+    'r programming',
+    'java',
+    'c++',
+    'scala',
+    'spark',
+    'hadoop',
+    'tensorflow',
+    'pytorch',
+    'machine learning',
+    'deep learning',
+    'databricks',
+    'snowflake',
+    'dbt',
+    'airflow',
+    'kubernetes',
+    'docker',
+    'etl',
+    'sas',
+    'matlab',
+    'aws',
+    'azure',
+    'gcp'
+  ];
+
+  const matches =
+    hardTechnicalSkills.filter(
+      skill => text.includes(skill)
+    );
+
+  const analystLike =
+    title.includes('analyst') ||
+    title.includes('analytics') ||
+    title.includes('business intelligence') ||
+    title.includes('data');
+
+  return {
+    count: matches.length,
+    skills: matches,
+    analystLike
+  };
+}
+
 function getWorkModeBonus(job) {
   const mode = normalize(job.work_mode);
 
@@ -372,6 +428,18 @@ function evaluateMatch(job) {
     score += 5;
   }
 
+  const tech = technicalBurden(job);
+
+  if (
+    tech.analystLike &&
+    tech.count >= 3
+  ) {
+    score = Math.min(
+      score,
+      49
+    );
+  }
+
   // ---------------------------------------------------
   // CAP SCORE
   // ---------------------------------------------------
@@ -399,7 +467,8 @@ function evaluateMatch(job) {
     status,
     seniority,
     functionMatches,
-    skillMatches
+    skillMatches,
+    technicalBurden: tech
   };
 }
 
@@ -425,23 +494,47 @@ export default async ({ req, res, log, error }) => {
     const tablesDB = new TablesDB(client);
 
     // ---------------------------------------------------
-    // FETCH JOBS NOT YET MATCHED
+    // FETCH ALL JOBS FOR RE-EVALUATION
     // ---------------------------------------------------
 
-    const jobsResponse =
-      await tablesDB.listRows({
-        databaseId: DATABASE_ID,
-        tableId: TABLE_ID,
-        queries: [
-          Query.equal(
-            'match_status',
-            'UNKNOWN'
-          ),
-          Query.limit(100)
-        ]
-      });
+    let jobs = [];
+    let cursor = null;
 
-    const jobs = jobsResponse.rows || [];
+    while (true) {
+      const queries = [
+        Query.limit(100)
+      ];
+
+      if (cursor) {
+        queries.push(
+          Query.cursorAfter(cursor)
+        );
+      }
+
+      const page =
+        await tablesDB.listRows({
+          databaseId:
+            DATABASE_ID,
+          tableId:
+            TABLE_ID,
+          queries
+        });
+
+      const rows =
+        page.rows || [];
+
+      jobs.push(...rows);
+
+      if (
+        rows.length < 100 ||
+        !rows[rows.length - 1]
+      ) {
+        break;
+      }
+
+      cursor =
+        rows[rows.length - 1].$id;
+    }
 
     let evaluated = 0;
     let highMatch = 0;
@@ -462,8 +555,8 @@ export default async ({ req, res, log, error }) => {
         // Do not match jobs already rejected
         // by the Eligibility Agent.
         if (
-          job.eligibility_status ===
-          'NOT_ELIGIBLE'
+          job.eligibility_status !==
+          'ELIGIBLE'
         ) {
           skipped++;
           continue;
