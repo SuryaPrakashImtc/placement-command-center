@@ -16,6 +16,12 @@ const APPWRITE_PROJECT_ID =
 const APPWRITE_API_KEY =
   process.env.JOB_AUTOMATION_API_KEY;
 
+const APPWRITE_FUNCTION_ID =
+  process.env.APPWRITE_FUNCTION_ID;
+
+const APPWRITE_FUNCTION_API_KEY =
+  process.env.APPWRITE_FUNCTION_API_KEY;
+
 const DATABASE_ID =
   process.env.APPWRITE_DATABASE_ID ||
   "6aa03d1800119759c9bb";
@@ -1939,6 +1945,98 @@ async function findPendingCvFile() {
   );
 }
 
+async function enqueueCustomization(
+  req
+) {
+  requireEnv(
+    "APPWRITE_FUNCTION_ID",
+    APPWRITE_FUNCTION_ID
+  );
+
+  requireEnv(
+    "APPWRITE_FUNCTION_API_KEY",
+    APPWRITE_FUNCTION_API_KEY
+  );
+
+  const body =
+    parseJsonBody(
+      req
+    );
+
+  const response =
+    await fetch(
+      APPWRITE_ENDPOINT +
+        "/functions/" +
+        encodeURIComponent(
+          APPWRITE_FUNCTION_ID
+        ) +
+        "/executions",
+      {
+        method:
+          "POST",
+
+        headers: {
+          "Content-Type":
+            "application/json",
+
+          "X-Appwrite-Project":
+            APPWRITE_PROJECT_ID,
+
+          "X-Appwrite-Key":
+            APPWRITE_FUNCTION_API_KEY
+        },
+
+        body:
+          JSON.stringify({
+            body:
+              JSON.stringify(
+                body
+              ),
+
+            async:
+              true,
+
+            path:
+              "/",
+
+            method:
+              "POST"
+          })
+      }
+    );
+
+  if (!response.ok) {
+    const errorText =
+      await response.text();
+
+    throw new Error(
+      `ASYNC_ENQUEUE_FAILED_${response.status}: ${errorText}`
+    );
+  }
+
+  const execution =
+    await response.json();
+
+  return {
+    status:
+      "QUEUED",
+
+    execution: {
+      id:
+        execution.$id ??
+        null,
+
+      status:
+        execution.status ??
+        "waiting"
+    },
+
+    message:
+      "Resume customization has been queued for background execution."
+  };
+}
+
+
 async function getRenderSource(
   req
 ) {
@@ -2556,6 +2654,35 @@ export default async function main({
     const path =
       req?.path ||
       "";
+
+    if (
+      path ===
+      "/enqueue"
+    ) {
+      if (
+        String(
+          req?.method ||
+          "POST"
+        ).toUpperCase() !==
+        "POST"
+      ) {
+        return res.json(
+          {
+            status:
+              "FAILED",
+            error:
+              "METHOD_NOT_ALLOWED"
+          },
+          405
+        );
+      }
+
+      return res.json(
+        await enqueueCustomization(
+          req
+        )
+      );
+    }
 
     if (
       path ===
