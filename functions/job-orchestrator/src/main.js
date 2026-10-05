@@ -488,6 +488,757 @@ export default async ({ req, res, log, error }) => {
     }
 
     // =======================================================
+
+    // =======================================================
+    // 4. REMOTE OK (free public JSON feed)
+    // =======================================================
+
+    let remoteOkFound = 0;
+    let remoteOkMatched = 0;
+    let remoteOkSaved = 0;
+    let remoteOkSkipped = 0;
+    let remoteOkStatus = 'SUCCESS';
+
+    try {
+      const remoteOkTags = [
+        'marketing',
+        'sales',
+        'business',
+        'analytics',
+        'data-analysis'
+      ];
+
+      const seenRemoteOkJobs = new Set();
+
+      for (const tag of remoteOkTags) {
+        const url =
+          'https://remoteok.com/api?tag=' +
+          encodeURIComponent(tag);
+
+        const response = await fetch(url, {
+          headers: {
+            'User-Agent':
+              'PlacementCommandCenter/1.0'
+          }
+        });
+
+        if (!response.ok) {
+          throw new Error(
+            \`Remote OK API returned \${response.status} for \${tag}\`
+          );
+        }
+
+        const data = await response.json();
+        const jobs =
+          Array.isArray(data)
+            ? data.filter(
+                item =>
+                  item &&
+                  item.id &&
+                  item.position
+              )
+            : [];
+
+        remoteOkFound += jobs.length;
+
+        for (const job of jobs) {
+          const searchable =
+            [
+              job.position,
+              job.company,
+              job.description,
+              ...(Array.isArray(job.tags)
+                ? job.tags
+                : [])
+            ]
+              .filter(Boolean)
+              .join(' ')
+              .toLowerCase();
+
+          const relevant = [
+            'marketing',
+            'brand',
+            'branding',
+            'growth',
+            'sales',
+            'business development',
+            'account management',
+            'business analyst',
+            'data analyst',
+            'analytics',
+            'business intelligence',
+            'market research',
+            'strategy'
+          ].some(keyword =>
+            searchable.includes(keyword)
+          );
+
+          if (!relevant) continue;
+
+          const sourceJobId =
+            \`REMOTEOK_\${String(job.id)}\`;
+
+          if (
+            seenRemoteOkJobs.has(
+              sourceJobId
+            )
+          ) {
+            continue;
+          }
+
+          seenRemoteOkJobs.add(
+            sourceJobId
+          );
+
+          remoteOkMatched++;
+
+          if (
+            await jobExists(
+              sourceJobId
+            )
+          ) {
+            remoteOkSkipped++;
+            continue;
+          }
+
+          const now =
+            new Date().toISOString();
+
+          await tablesDB.createRow({
+            databaseId:
+              '6aa03d1800119759c9bb',
+            tableId:
+              'jobs',
+            rowId:
+              ID.unique(),
+            data: {
+              source:
+                'Remote OK',
+
+              job_title:
+                job.position ||
+                'Unknown',
+
+              company_name:
+                job.company ||
+                'Unknown',
+
+              job_url:
+                job.url ||
+                '',
+
+              location:
+                job.location ||
+                'Worldwide',
+
+              job_description:
+                job.description ||
+                '',
+
+              job_type:
+                'Unknown',
+
+              experience_required:
+                'Unknown',
+
+              education_required:
+                'Unknown',
+
+              salary_range:
+                job.salary_min ||
+                job.salary_max
+                  ? (
+                      (
+                        job.salary_min ||
+                        ''
+                      ) +
+                      ' - ' +
+                      (
+                        job.salary_max ||
+                        ''
+                      )
+                    ).trim()
+                  : 'Not disclosed',
+
+              work_mode:
+                'Remote',
+
+              industry:
+                Array.isArray(
+                  job.tags
+                )
+                  ? job.tags.join(', ')
+                  : 'Unknown',
+
+              department:
+                'Remote',
+
+              function:
+                tag,
+
+              company_size:
+                'Unknown',
+
+              company_type:
+                'Unknown',
+
+              job_posted_date:
+                job.date ||
+                null,
+
+              application_deadline:
+                null,
+
+              job_status:
+                'OPEN',
+
+              eligibility_status:
+                'UNKNOWN',
+
+              match_status:
+                'UNKNOWN',
+
+              application_status:
+                'NOT_APPLIED',
+
+              discovery_date:
+                now,
+
+              job_id:
+                sourceJobId,
+
+              source_job_id:
+                sourceJobId,
+
+              company_id:
+                null,
+
+              source_platform:
+                'Remote OK',
+
+              first_seen_date:
+                now,
+
+              last_updated_date:
+                now
+            }
+          });
+
+          remoteOkSaved++;
+        }
+      }
+    } catch (remoteOkError) {
+      remoteOkStatus =
+        'PARTIAL_SUCCESS';
+
+      error(
+        \`Remote OK: \${remoteOkError.message}\`
+      );
+    }
+
+    // =======================================================
+    // 5. WE WORK REMOTELY (public RSS feed)
+    // =======================================================
+
+    let wwrFound = 0;
+    let wwrMatched = 0;
+    let wwrSaved = 0;
+    let wwrSkipped = 0;
+    let wwrStatus = 'SUCCESS';
+
+    function rssValue(xml, tagName) {
+      const match =
+        xml.match(
+          new RegExp(
+            \`<\${tagName}[^>]*>([\\\\s\\\\S]*?)</\${tagName}>\`,
+            'i'
+          )
+        );
+
+      if (!match) return '';
+
+      return String(match[1])
+        .replace(
+          /^<!\\[CDATA\\[|\\]\\]>$/g,
+          ''
+        )
+        .replace(
+          /<[^>]+>/g,
+          ' '
+        )
+        .replace(
+          /&amp;/g,
+          '&'
+        )
+        .replace(
+          /&quot;/g,
+          '"'
+        )
+        .replace(
+          /&#39;/g,
+          "'"
+        )
+        .replace(
+          /&lt;/g,
+          '<'
+        )
+        .replace(
+          /&gt;/g,
+          '>'
+        )
+        .replace(
+          /\\s+/g,
+          ' '
+        )
+        .trim();
+    }
+
+    try {
+      const response =
+        await fetch(
+          'https://weworkremotely.com/categories/remote-sales-and-marketing-jobs.rss',
+          {
+            headers: {
+              'User-Agent':
+                'PlacementCommandCenter/1.0'
+            }
+          }
+        );
+
+      if (!response.ok) {
+        throw new Error(
+          \`We Work Remotely RSS returned \${response.status}\`
+        );
+      }
+
+      const xml =
+        await response.text();
+
+      const items =
+        xml.match(
+          /<item>[\\s\\S]*?<\\/item>/gi
+        ) || [];
+
+      wwrFound = items.length;
+
+      for (const item of items) {
+        const title =
+          rssValue(
+            item,
+            'title'
+          );
+
+        const link =
+          rssValue(
+            item,
+            'link'
+          );
+
+        const description =
+          rssValue(
+            item,
+            'description'
+          );
+
+        const pubDate =
+          rssValue(
+            item,
+            'pubDate'
+          );
+
+        const searchable =
+          (
+            title +
+            ' ' +
+            description
+          ).toLowerCase();
+
+        const relevant = [
+          'marketing',
+          'brand',
+          'branding',
+          'growth',
+          'sales',
+          'business development',
+          'account management',
+          'strategy',
+          'analytics'
+        ].some(keyword =>
+          searchable.includes(keyword)
+        );
+
+        if (
+          !relevant ||
+          !link
+        ) {
+          continue;
+        }
+
+        const sourceJobId =
+          'WWR_' +
+          link;
+
+        wwrMatched++;
+
+        if (
+          await jobExists(
+            sourceJobId
+          )
+        ) {
+          wwrSkipped++;
+          continue;
+        }
+
+        const now =
+          new Date().toISOString();
+
+        const parts =
+          title.split(':');
+
+        const company =
+          parts.length > 1
+            ? parts[0].trim()
+            : 'Unknown';
+
+        const role =
+          parts.length > 1
+            ? parts.slice(1).join(':').trim()
+            : title;
+
+        await tablesDB.createRow({
+          databaseId:
+            '6aa03d1800119759c9bb',
+          tableId:
+            'jobs',
+          rowId:
+            ID.unique(),
+          data: {
+            source:
+              'We Work Remotely',
+
+            job_title:
+              role ||
+              'Unknown',
+
+            company_name:
+              company ||
+              'Unknown',
+
+            job_url:
+              link,
+
+            location:
+              'Remote',
+
+            job_description:
+              description ||
+              '',
+
+            job_type:
+              'Unknown',
+
+            experience_required:
+              'Unknown',
+
+            education_required:
+              'Unknown',
+
+            salary_range:
+              'Not disclosed',
+
+            work_mode:
+              'Remote',
+
+            industry:
+              'Sales & Marketing',
+
+            department:
+              'Sales & Marketing',
+
+            function:
+              'sales-marketing',
+
+            company_size:
+              'Unknown',
+
+            company_type:
+              'Unknown',
+
+            job_posted_date:
+              pubDate
+                ? new Date(
+                    pubDate
+                  ).toISOString()
+                : null,
+
+            application_deadline:
+              null,
+
+            job_status:
+              'OPEN',
+
+            eligibility_status:
+              'UNKNOWN',
+
+            match_status:
+              'UNKNOWN',
+
+            application_status:
+              'NOT_APPLIED',
+
+            discovery_date:
+              now,
+
+            job_id:
+              sourceJobId,
+
+            source_job_id:
+              sourceJobId,
+
+            company_id:
+              null,
+
+            source_platform:
+              'We Work Remotely',
+
+            first_seen_date:
+              now,
+
+            last_updated_date:
+              now
+          }
+        });
+
+        wwrSaved++;
+      }
+    } catch (wwrError) {
+      wwrStatus =
+        'PARTIAL_SUCCESS';
+
+      error(
+        \`We Work Remotely: \${wwrError.message}\`
+      );
+    }
+
+    // =======================================================
+    // 6. REMOTE LANDERS (free public ATS-direct API)
+    // =======================================================
+
+    let remoteLandersFound = 0;
+    let remoteLandersMatched = 0;
+    let remoteLandersSaved = 0;
+    let remoteLandersSkipped = 0;
+    let remoteLandersStatus = 'SUCCESS';
+
+    try {
+      const response =
+        await fetch(
+          'https://remotelanders.com/api/jobs?limit=100&page=1',
+          {
+            headers: {
+              'User-Agent':
+                'PlacementCommandCenter/1.0'
+            }
+          }
+        );
+
+      if (!response.ok) {
+        throw new Error(
+          \`Remote Landers API returned \${response.status}\`
+        );
+      }
+
+      const data =
+        await response.json();
+
+      const jobs =
+        Array.isArray(
+          data.jobs
+        )
+          ? data.jobs
+          : [];
+
+      remoteLandersFound =
+        jobs.length;
+
+      for (const job of jobs) {
+        const searchable =
+          [
+            job.title,
+            job.category,
+            job.subtags,
+            job.company
+          ]
+            .flat()
+            .filter(Boolean)
+            .join(' ')
+            .toLowerCase();
+
+        const relevant = [
+          'marketing',
+          'sales',
+          'business development',
+          'account management',
+          'growth',
+          'brand',
+          'strategy',
+          'analytics',
+          'market research',
+          'business intelligence',
+          'data'
+        ].some(keyword =>
+          searchable.includes(
+            keyword
+          )
+        );
+
+        if (!relevant) {
+          continue;
+        }
+
+        const sourceJobId =
+          'REMOTELANDERS_' +
+          String(
+            job.slug
+          );
+
+        remoteLandersMatched++;
+
+        if (
+          await jobExists(
+            sourceJobId
+          )
+        ) {
+          remoteLandersSkipped++;
+          continue;
+        }
+
+        const now =
+          new Date().toISOString();
+
+        await tablesDB.createRow({
+          databaseId:
+            '6aa03d1800119759c9bb',
+          tableId:
+            'jobs',
+          rowId:
+            ID.unique(),
+          data: {
+            source:
+              'Remote Landers',
+
+            job_title:
+              job.title ||
+              'Unknown',
+
+            company_name:
+              job.company ||
+              'Unknown',
+
+            job_url:
+              job.applyUrl ||
+              job.url ||
+              '',
+
+            location:
+              job.location ||
+              'Worldwide',
+
+            job_description:
+              '',
+
+            job_type:
+              job.type ||
+              'Unknown',
+
+            experience_required:
+              job.level ||
+              'Unknown',
+
+            education_required:
+              'Unknown',
+
+            salary_range:
+              job.salary ||
+              'Not disclosed',
+
+            work_mode:
+              'Remote',
+
+            industry:
+              job.category ||
+              'Unknown',
+
+            department:
+              job.category ||
+              'Unknown',
+
+            function:
+              Array.isArray(
+                job.subtags
+              )
+                ? job.subtags.join(', ')
+                : '',
+
+            company_size:
+              'Unknown',
+
+            company_type:
+              'Unknown',
+
+            job_posted_date:
+              job.postedDate ||
+              null,
+
+            application_deadline:
+              null,
+
+            job_status:
+              'OPEN',
+
+            eligibility_status:
+              'UNKNOWN',
+
+            match_status:
+              'UNKNOWN',
+
+            application_status:
+              'NOT_APPLIED',
+
+            discovery_date:
+              now,
+
+            job_id:
+              sourceJobId,
+
+            source_job_id:
+              sourceJobId,
+
+            company_id:
+              null,
+
+            source_platform:
+              'Remote Landers',
+
+            first_seen_date:
+              now,
+
+            last_updated_date:
+              now
+          }
+        });
+
+        remoteLandersSaved++;
+      }
+    } catch (remoteLandersError) {
+      remoteLandersStatus =
+        'PARTIAL_SUCCESS';
+
+      error(
+        \`Remote Landers: \${remoteLandersError.message}\`
+      );
+    }
+
     // RESULT
     // =======================================================
 
@@ -516,6 +1267,31 @@ export default async ({ req, res, log, error }) => {
         jobsSaved: jobicySaved,
         jobsSkippedAsDuplicate: jobicySkipped,
         requestsMade: jobicyRequests
+      },
+
+      remoteOk: {
+        status: remoteOkStatus,
+        tags: remoteOkTags,
+        jobsFound: remoteOkFound,
+        relevantJobsMatched: remoteOkMatched,
+        jobsSaved: remoteOkSaved,
+        jobsSkippedAsDuplicate: remoteOkSkipped
+      },
+
+      weWorkRemotely: {
+        status: wwrStatus,
+        jobsFound: wwrFound,
+        relevantJobsMatched: wwrMatched,
+        jobsSaved: wwrSaved,
+        jobsSkippedAsDuplicate: wwrSkipped
+      },
+
+      remoteLanders: {
+        status: remoteLandersStatus,
+        jobsFound: remoteLandersFound,
+        relevantJobsMatched: remoteLandersMatched,
+        jobsSaved: remoteLandersSaved,
+        jobsSkippedAsDuplicate: remoteLandersSkipped
       }
     });
 
