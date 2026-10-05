@@ -646,6 +646,11 @@ export default async ({ req, res, error }) => {
     const readyToApply =
       jobs.filter(job =>
         isEligible(job) &&
+        (
+          lower(job.match_status) ===
+            "high_match" ||
+          matchScore(job) >= 80
+        ) &&
         applicationStatus(job) ===
           "NOT_APPLIED" &&
         Boolean(jobUrl(job)) &&
