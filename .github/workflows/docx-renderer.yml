@@ -31,29 +31,62 @@ jobs:
 
       - name: Get GitHub OIDC token
         id: oidc
+        shell: bash
         run: |
-          test -n "$ACTIONS_ID_TOKEN_REQUEST_URL"
-          test -n "$ACTIONS_ID_TOKEN_REQUEST_TOKEN"
+          set -euo pipefail
+
+          test -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}"
+          test -n "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}"
+
           oidc_url="${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=placement-command-center-renderer"
-          token=$(curl --fail --silent --show-error             -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN"             "$oidc_url" | jq -r '.value')
-          test -n "$token"
-          test "$token" != "null"
-          echo "token=$token" >> "$GITHUB_OUTPUT"
+
+          response=$(curl --silent --show-error             -w "\nHTTP_STATUS=%{http_code}"             -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}"             "${oidc_url}")
+
+          http_status=$(echo "${response}" | sed -n 's/^HTTP_STATUS=//p')
+          body=$(echo "${response}" | sed '/^HTTP_STATUS=/d')
+
+          echo "GitHub OIDC HTTP status: ${http_status}"
+
+          if [ "${http_status}" != "200" ]; then
+            echo "${body}"
+            exit 1
+          fi
+
+          token=$(echo "${body}" | jq -r '.value // empty')
+
+          if [ -z "${token}" ]; then
+            echo "GitHub OIDC response did not contain a token."
+            exit 1
+          fi
+
+          echo "token=${token}" >> "${GITHUB_OUTPUT}"
 
       - name: Fetch pending customized CV from Appwrite
         id: source
         env:
           OIDC_TOKEN: ${{ steps.oidc.outputs.token }}
           APPWRITE_FUNCTION_URL: https://placement-command-center-ixkc.sgp.appwrite.run/render-source
+        shell: bash
         run: |
+          set -euo pipefail
+
           mkdir -p input rendered
-          curl --fail --silent --show-error --location             -H "Authorization: Bearer $OIDC_TOKEN"             "$APPWRITE_FUNCTION_URL"             -o render-source.json
+
+          http_status=$(curl --silent --show-error --location             -w "%{http_code}"             -H "Authorization: Bearer ${OIDC_TOKEN}"             "${APPWRITE_FUNCTION_URL}"             -o render-source.json)
+
+          echo "Appwrite render-source HTTP status: ${http_status}"
+
+          if [ "${http_status}" -ge 400 ]; then
+            echo "Appwrite render-source response:"
+            cat render-source.json
+            exit 1
+          fi
 
           status=$(jq -r '.status // "FAILED"' render-source.json)
 
-          if [ "$status" = "NO_CV_AVAILABLE" ]; then
+          if [ "${status}" = "NO_CV_AVAILABLE" ]; then
             echo "No pending customized CV requires validation."
-            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "available=false" >> "${GITHUB_OUTPUT}"
             exit 0
           fi
 
@@ -65,9 +98,11 @@ jobs:
           jq -r '.content' render-source.json | base64 -d > input/resume.docx
           test -s input/resume.docx
 
-          echo "available=true" >> "$GITHUB_OUTPUT"
-          echo "file_id=$file_id" >> "$GITHUB_OUTPUT"
-          echo "file_name=$file_name" >> "$GITHUB_OUTPUT"
+          echo "available=true" >> "${GITHUB_OUTPUT}"
+          echo "file_id=${file_id}" >> "${GITHUB_OUTPUT}"
+          echo "file_name=${file_name}" >> "${GITHUB_OUTPUT}"
+
+          echo "Validating: ${file_name}"
 
       - name: Render DOCX to PDF
         if: steps.source.outputs.available == 'true'
@@ -80,9 +115,9 @@ jobs:
         id: pages
         run: |
           pages=$(pdfinfo rendered/resume.pdf | awk '/^Pages:/ {print $2}')
-          echo "Rendered pages: $pages"
-          test -n "$pages"
-          echo "pages=$pages" >> "$GITHUB_OUTPUT"
+          echo "Rendered pages: ${pages}"
+          test -n "${pages}"
+          echo "pages=${pages}" >> "${GITHUB_OUTPUT}"
 
       - name: Finalize render result in Appwrite
         if: steps.source.outputs.available == 'true'
@@ -91,14 +126,24 @@ jobs:
           APPWRITE_FUNCTION_URL: https://placement-command-center-ixkc.sgp.appwrite.run/render-result
           FILE_ID: ${{ steps.source.outputs.file_id }}
           PAGES: ${{ steps.pages.outputs.pages }}
+        shell: bash
         run: |
-          result=$(curl --fail --silent --show-error --location             -X POST             -H "Authorization: Bearer $OIDC_TOKEN"             -H "Content-Type: application/json"             --data "{"fileId":"$FILE_ID","pages":$PAGES}"             "$APPWRITE_FUNCTION_URL")
+          set -euo pipefail
 
-          echo "$result" | jq .
+          payload=$(jq -n             --arg fileId "${FILE_ID}"             --argjson pages "${PAGES}"             '{fileId: $fileId, pages: $pages}')
 
-          status=$(echo "$result" | jq -r '.status // "FAILED"')
+          http_status=$(curl --silent --show-error --location             -w "%{http_code}"             -X POST             -H "Authorization: Bearer ${OIDC_TOKEN}"             -H "Content-Type: application/json"             --data "${payload}"             "${APPWRITE_FUNCTION_URL}"             -o render-result.json)
 
-          if [ "$status" = "VALIDATED" ] && [ "$PAGES" -eq 1 ]; then
+          echo "Appwrite render-result HTTP status: ${http_status}"
+          cat render-result.json | jq .
+
+          if [ "${http_status}" -ge 400 ]; then
+            exit 1
+          fi
+
+          status=$(jq -r '.status // "FAILED"' render-result.json)
+
+          if [ "${status}" = "VALIDATED" ] && [ "${PAGES}" -eq 1 ]; then
             echo "PASS: rendered CV is exactly 1 page."
             exit 0
           fi
@@ -109,4 +154,4 @@ jobs:
       - name: Cleanup private render files
         if: always()
         run: |
-          rm -f render-source.json input/resume.docx rendered/resume.pdf
+          rm -f render-source.json render-result.json input/resume.docx rendered/resume.pdf
