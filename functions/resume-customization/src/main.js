@@ -100,7 +100,7 @@ const GITHUB_OIDC_JWKS =
  * wait ~6 sec
  * Attempt 4
  */
-const GEMINI_MAX_RETRIES = 1;
+const GEMINI_MAX_RETRIES = 0;
 const GEMINI_RETRY_BASE_MS = 1000;
 const GEMINI_RETRY_JITTER_MS = 250;
 
@@ -700,8 +700,14 @@ async function callGemini(
 
               generationConfig: {
                 temperature: 0.1,
+
                 responseMimeType:
-                  "application/json"
+                  "application/json",
+
+                thinkingConfig: {
+                  thinkingLevel:
+                    "low"
+                }
               }
             })
           }
