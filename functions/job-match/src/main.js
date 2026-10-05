@@ -476,7 +476,8 @@ export default async ({ req, res, log, error }) => {
           tableId: TABLE_ID,
           rowId: job.$id,
           data: {
-            match_status: result.status
+            match_status: result.status,
+            match_score: result.score
           }
         });
 
