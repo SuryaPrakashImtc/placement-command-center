@@ -42,6 +42,9 @@ const SAFE_PAGE_RATIO = 0.95;
 const MAX_CUSTOMIZATIONS_PER_24H =
   10;
 
+const MAX_STORAGE_FILENAME_LENGTH =
+  128;
+
 /*
  * IMPORTANT:
  * This is the actual current master CV filename.
@@ -1699,6 +1702,45 @@ function getMatchScore(
   return 0;
 }
 
+function fitStorageFilename(
+  filename
+) {
+  const value =
+    normalize(
+      filename
+    );
+
+  const extension =
+    value.toLowerCase().endsWith(
+      ".docx"
+    )
+      ? ".docx"
+      : "";
+
+  const base =
+    extension
+      ? value.slice(
+          0,
+          -extension.length
+        )
+      : value;
+
+  const maxBaseLength =
+    Math.max(
+      1,
+      MAX_STORAGE_FILENAME_LENGTH -
+        extension.length
+    );
+
+  return (
+    base.slice(
+      0,
+      maxBaseLength
+    ) +
+    extension
+  );
+}
+
 function jobOutputFingerprint(
   job
 ) {
@@ -1718,7 +1760,7 @@ function jobOutputFingerprint(
       )
       .slice(
         0,
-        80
+        42
       );
 
   const title =
@@ -2340,18 +2382,23 @@ async function finalizeRenderResult(
         PENDING_CV_PREFIX.length
       );
 
+    const finalFilename =
+      fitStorageFilename(
+        finalName.startsWith(
+          FINAL_CV_PREFIX
+        )
+          ? finalName
+          : FINAL_CV_PREFIX +
+            finalName
+      );
+
     const renamed =
       await storage.updateFile({
         bucketId:
           RESUME_BUCKET_ID,
         fileId,
         name:
-          finalName.startsWith(
-            FINAL_CV_PREFIX
-          )
-            ? finalName
-            : FINAL_CV_PREFIX +
-              finalName
+          finalFilename
       });
 
     return {
@@ -2763,7 +2810,9 @@ async function customizeResume(req) {
       );
 
   const outputFilename =
-    `${PENDING_CV_PREFIX}${company}-${jobTitle}-${timestamp}.docx`;
+    fitStorageFilename(
+      `${PENDING_CV_PREFIX}${company}-${jobTitle}-${timestamp}.docx`
+    );
 
   /*
    * -------------------------------------------------------
