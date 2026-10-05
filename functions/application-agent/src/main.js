@@ -517,7 +517,7 @@ async function launchTinyFishApplication(job, cvFile, tokens) {
   return data;
 }
 
-async function approveApplication(tablesDB, storage, request) {
+async function approveApplication(tablesDB, storage, tokens, request) {
   const jobId = normalize(request.jobId);
 
   if (!jobId) {
@@ -831,6 +831,7 @@ export default async ({ req, res, error }) => {
         await approveApplication(
           tablesDB,
           storage,
+          tokens,
           request
         )
       );
