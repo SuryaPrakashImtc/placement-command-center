@@ -100,13 +100,12 @@ const GITHUB_OIDC_JWKS =
  * wait ~6 sec
  * Attempt 4
  */
-const GEMINI_MAX_RETRIES = 3;
-const GEMINI_RETRY_BASE_MS = 1500;
-const GEMINI_RETRY_JITTER_MS = 500;
+const GEMINI_MAX_RETRIES = 1;
+const GEMINI_RETRY_BASE_MS = 1000;
+const GEMINI_RETRY_JITTER_MS = 250;
 
 const GEMINI_RETRYABLE_STATUS_CODES =
   new Set([
-    408,
     429,
     500,
     502,
