@@ -458,6 +458,18 @@ async function approveApplication(tablesDB, storage, request) {
     };
   }
 
+  if (!isHighMatch(job)) {
+    return {
+      status: "JOB_NOT_HIGH_MATCH",
+      job_id: jobId,
+      match_status: normalize(
+        job.match_status ||
+        job.matchStatus
+      ),
+      match_score: matchScore(job)
+    };
+  }
+
   if (!jobUrl(job)) {
     return {
       status: "APPLICATION_URL_MISSING",
