@@ -9,6 +9,9 @@ export default async ({ req, res, log, error }) => {
 
     const tablesDB = new TablesDB(client);
 
+    const tavilyKey =
+      process.env.TAVILY_API_KEY || "";
+
     // =======================================================
     // HELPERS
     // =======================================================
@@ -488,6 +491,347 @@ export default async ({ req, res, log, error }) => {
     }
 
     // =======================================================
+
+    // =======================================================
+    // 4. WEB SEARCH DISCOVERY
+    // =======================================================
+    //
+    // Search major job platforms through a web-search index
+    // rather than scraping or bypassing platform protections.
+    // This lets us surface LinkedIn, Internshala, Naukri,
+    // Foundit, Cutshort, Wellfound and Indeed listings while
+    // leaving login/CAPTCHA-protected application steps to
+    // the human/browser stage.
+
+    let webSearchFound = 0;
+    let webSearchSaved = 0;
+    let webSearchSkipped = 0;
+    let webSearchQueries = 0;
+    let webSearchStatus =
+      tavilyKey
+        ? 'SUCCESS'
+        : 'NOT_CONFIGURED';
+
+    const webSourceConfigs = [
+      {
+        source: 'LinkedIn',
+        domain: 'linkedin.com',
+        pathHint: '/jobs/view/',
+        query:
+          'MBA fresher entry level marketing sales business development market research jobs India'
+      },
+      {
+        source: 'Internshala',
+        domain: 'internshala.com',
+        pathHint: '/job/detail/',
+        query:
+          'MBA fresher marketing sales business development analyst jobs India'
+      },
+      {
+        source: 'Naukri',
+        domain: 'naukri.com',
+        pathHint: '/job-listings-',
+        query:
+          'MBA fresher marketing sales business development analyst jobs India'
+      },
+      {
+        source: 'Foundit',
+        domain: 'foundit.in',
+        pathHint: '/job/',
+        query:
+          'MBA fresher marketing sales business development market research jobs India'
+      },
+      {
+        source: 'Cutshort',
+        domain: 'cutshort.io',
+        pathHint: '/job/',
+        query:
+          'marketing sales business development market research jobs India entry level MBA'
+      },
+      {
+        source: 'Wellfound',
+        domain: 'wellfound.com',
+        pathHint: '/jobs/',
+        query:
+          'marketing sales business development market research jobs India entry level'
+      },
+      {
+        source: 'Indeed',
+        domain: 'indeed.com',
+        pathHint: '/viewjob',
+        query:
+          'MBA fresher marketing sales business development analyst jobs India'
+      }
+    ];
+
+    function webSourceJobId(source, url) {
+      const encoded =
+        Buffer
+          .from(
+            String(url)
+          )
+          .toString(
+            'base64url'
+          )
+          .slice(
+            0,
+            180
+          );
+
+      return (
+        'WEB_' +
+        source
+          .toUpperCase()
+          .replace(/[^A-Z0-9]+/g, '_') +
+        '_' +
+        encoded
+      );
+    }
+
+    function looksLikeJobPage(config, url) {
+      const normalizedUrl =
+        String(
+          url || ''
+        ).toLowerCase();
+
+      return (
+        normalizedUrl.includes(
+          config.domain
+        ) &&
+        normalizedUrl.includes(
+          config.pathHint
+        )
+      );
+    }
+
+    function cleanWebText(value) {
+      return String(value || '')
+        .replace(/<[^>]*>/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    }
+
+    if (tavilyKey) {
+      for (const config of webSourceConfigs) {
+        try {
+          const response =
+            await fetch(
+              'https://api.tavily.com/search',
+              {
+                method: 'POST',
+                headers: {
+                  Authorization:
+                    `Bearer ${tavilyKey}`,
+                  'Content-Type':
+                    'application/json'
+                },
+                body:
+                  JSON.stringify({
+                    query:
+                      config.query,
+                    search_depth:
+                      'basic',
+                    max_results:
+                      8,
+                    topic:
+                      'general',
+                    time_range:
+                      'week',
+                    include_answer:
+                      false,
+                    include_raw_content:
+                      false,
+                    include_domains:
+                      [config.domain]
+                  })
+              }
+            );
+
+          webSearchQueries++;
+
+          if (!response.ok) {
+            throw new Error(
+              `Tavily ${response.status}`
+            );
+          }
+
+          const data =
+            await response.json();
+
+          const results =
+            Array.isArray(
+              data.results
+            )
+              ? data.results
+              : [];
+
+          webSearchFound +=
+            results.length;
+
+          for (
+            const result
+            of results
+          ) {
+            const url =
+              String(
+                result.url || ''
+              ).trim();
+
+            if (
+              !looksLikeJobPage(
+                config,
+                url
+              )
+            ) {
+              continue;
+            }
+
+            const title =
+              cleanWebText(
+                result.title
+              );
+
+            const description =
+              cleanWebText(
+                result.content
+              );
+
+            if (
+              !title &&
+              !description
+            ) {
+              continue;
+            }
+
+            const sourceJobId =
+              webSourceJobId(
+                config.source,
+                url
+              );
+
+            if (
+              await jobExists(
+                sourceJobId
+              )
+            ) {
+              webSearchSkipped++;
+              continue;
+            }
+
+            const now =
+              new Date().toISOString();
+
+            await tablesDB.createRow({
+              databaseId:
+                '6aa03d1800119759c9bb',
+              tableId:
+                'jobs',
+              rowId:
+                ID.unique(),
+              data: {
+                source:
+                  config.source,
+
+                job_title:
+                  title ||
+                  'Unknown',
+
+                company_name:
+                  'Unknown',
+
+                job_url:
+                  url,
+
+                location:
+                  'India / Remote',
+
+                job_description:
+                  description,
+
+                job_type:
+                  'Unknown',
+
+                experience_required:
+                  'Unknown',
+
+                education_required:
+                  'Unknown',
+
+                salary_range:
+                  'Not disclosed',
+
+                work_mode:
+                  'Remote / Hybrid',
+
+                industry:
+                  'Unknown',
+
+                department:
+                  'Unknown',
+
+                function:
+                  'Marketing / Sales / Analytics',
+
+                company_size:
+                  'Unknown',
+
+                company_type:
+                  'Unknown',
+
+                job_posted_date:
+                  result.published_date ||
+                  null,
+
+                application_deadline:
+                  null,
+
+                job_status:
+                  'OPEN',
+
+                eligibility_status:
+                  'UNKNOWN',
+
+                match_status:
+                  'UNKNOWN',
+
+                application_status:
+                  'NOT_APPLIED',
+
+                discovery_date:
+                  now,
+
+                job_id:
+                  sourceJobId,
+
+                source_job_id:
+                  sourceJobId,
+
+                company_id:
+                  null,
+
+                source_platform:
+                  config.source,
+
+                first_seen_date:
+                  now,
+
+                last_updated_date:
+                  now
+              }
+            });
+
+            webSearchSaved++;
+          }
+        } catch (webError) {
+          webSearchStatus =
+            'PARTIAL_SUCCESS';
+
+          error(
+            `${config.source}: ${webError.message}`
+          );
+        }
+      }
+    }
 
     // =======================================================
     // 4. REMOTE OK (free public JSON feed)
@@ -1267,6 +1611,23 @@ export default async ({ req, res, log, error }) => {
         jobsSaved: jobicySaved,
         jobsSkippedAsDuplicate: jobicySkipped,
         requestsMade: jobicyRequests
+      },
+
+      webSearch: {
+        status:
+          webSearchStatus,
+        platforms:
+          webSourceConfigs.map(
+            item => item.source
+          ),
+        jobsFound:
+          webSearchFound,
+        jobsSaved:
+          webSearchSaved,
+        jobsSkippedAsDuplicate:
+          webSearchSkipped,
+        queriesMade:
+          webSearchQueries
       },
 
       remoteOk: {
