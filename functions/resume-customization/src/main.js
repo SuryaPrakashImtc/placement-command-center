@@ -197,12 +197,17 @@ function conservativePageBudget(
       marker
     );
 
+  /*
+   * The marker is a useful conservative preflight signal, but
+   * the actual LibreOffice render is now the authoritative
+   * one-page gate. If the master lacks the cached marker,
+   * fall back to the existing conservative character ceiling
+   * rather than failing before the renderer can validate it.
+   */
   if (
     markerIndex < 0
   ) {
-    throw new Error(
-      "ONE_PAGE_NOT_ACHIEVABLE: master template has no first-page render marker"
-    );
+    return MAX_ONE_PAGE_CHARS;
   }
 
   const pageOneXml =
@@ -219,9 +224,7 @@ function conservativePageBudget(
   if (
     pageOneChars < 1
   ) {
-    throw new Error(
-      "ONE_PAGE_NOT_ACHIEVABLE: unable to calculate master page-one content budget"
-    );
+    return MAX_ONE_PAGE_CHARS;
   }
 
   return Math.min(
@@ -2139,12 +2142,47 @@ async function finalizeRenderResult(
   const storage =
     createStorageClient();
 
-  const file =
-    await storage.getFile({
-      bucketId:
-        RESUME_BUCKET_ID,
-      fileId
-    });
+  let file;
+
+  try {
+    file =
+      await storage.getFile({
+        bucketId:
+          RESUME_BUCKET_ID,
+        fileId
+      });
+  } catch (error) {
+    const message =
+      String(
+        error?.message ??
+        ""
+      );
+
+    /*
+     * A renderer retry may arrive after a previous attempt
+     * already finalized or rejected the same file.
+     */
+    if (
+      pages ===
+      1
+    ) {
+      return {
+        status:
+          "ALREADY_PROCESSED",
+        pages,
+        file_id:
+          fileId
+      };
+    }
+
+    return {
+      status:
+        "ALREADY_REJECTED",
+      pages,
+      file_id:
+        fileId
+    };
+  }
 
   if (
     !normalize(
@@ -2153,6 +2191,28 @@ async function finalizeRenderResult(
       PENDING_CV_PREFIX
     )
   ) {
+    if (
+      pages ===
+      1 &&
+      normalize(
+        file.name
+      ).startsWith(
+        FINAL_CV_PREFIX
+      )
+    ) {
+      return {
+        status:
+          "ALREADY_VALIDATED",
+        pages,
+        file: {
+          id:
+            file.$id,
+          name:
+            file.name
+        }
+      };
+    }
+
     throw new Error(
       "RENDER_RESULT_FILE_NOT_PENDING"
     );
