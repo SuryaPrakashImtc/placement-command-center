@@ -1,4 +1,4 @@
-import { Client, TablesDB, Query } from "node-appwrite";
+import { Client, TablesDB, Query, Storage } from "node-appwrite";
 import { createRemoteJWKSet, jwtVerify } from "jose";
 
 /* =========================================================
@@ -29,6 +29,14 @@ const JOBS_TABLE_ID =
  */
 const RESUME_BUCKET_ID =
   "6ac038600011e9e4bc37";
+
+const PENDING_CV_PREFIX =
+  "PENDING-CUSTOMIZED-";
+
+const FINAL_CV_PREFIX =
+  "CUSTOMIZED-";
+
+const SAFE_PAGE_RATIO = 0.95;
 
 /*
  * IMPORTANT:
@@ -107,115 +115,6 @@ const GEMINI_RETRYABLE_STATUS_CODES =
 
 
 /* =========================================================
-   CANDIDATE TRUTH BASE
-   ========================================================= */
-
-const CANDIDATE_TRUTH = {
-  name: "Surya Prakash Pandey",
-
-  summary:
-    "I am a PGDM Marketing student at IMT Nagpur with hands-on experience in product launch management, B2B marketing communications, stakeholder management, and event marketing through my internship at Blue Star Limited. I have contributed to launch planning, marketing communications, vendor management, and process improvement while collaborating with senior leadership, product teams, creative agencies, and external partners. I am passionate about building brands through structured execution and customer-centric marketing.",
-
-  education: [
-    "PGDM — Marketing (Major) & BAIT (Minor) – Institute of Management Technology, Nagpur",
-    "2027 | 8.04",
-    "Graduation — B. Com (Hons), Seth Anandram Jaipuria College",
-    "2024 | 73.86%",
-    "12th — Commerce, Gyan Bharati Vidyapith",
-    "2021 | 69.73%",
-    "10th — Gyan Bharati Vidyapith",
-    "2019 | 62.38%"
-  ],
-
-  internship: {
-    company: "Blue Star Ltd",
-    role: "Marketing Intern",
-    period: "April 2026 – July 2026",
-
-    bullets: [
-      "Supported end-to-end execution of Blue Star's ₹6.5 Cr multi-city launch of 4 commercial HVAC products through marketing communication, event planning, and stakeholder coordination.",
-      "Updated 17 product brochures, saving ₹85,000 in agency costs while ensuring technical accuracy and brand consistency.",
-      "Created 100+ marketing creatives, 8+ executive presentations, 2 corporate videos, and 2 leadership video shoots, supporting product launches, CSR initiatives, and corporate communication.",
-      "Negotiated with 23+ hotels and coordinated vendors, logistics, and booth operations across product launches and corporate events."
-    ]
-  },
-
-  projects: [
-    {
-      name:
-        "Development of a Technician-Friendly Installation Guide",
-      description:
-        "Developed a visual installation guide by transforming a complex HVAC SOP into a technician-centric learning resource through structured information design, simplified technical communication, and user-focused visual presentation."
-    },
-
-    {
-      name:
-        "General Mills — Marketing & Commercial Intelligence Dashboard",
-      description:
-        "Developed a 2-page Power BI dashboard integrating company, consumer, category, market-share, and market data to analyse portfolio performance and identify commercial opportunities."
-    },
-
-    {
-      name:
-        "AI-Driven B2B Prospecting & Client Acquisition — The Insignia Consultant",
-      description:
-        "Developed an AI-assisted prospecting model using Gemini and ChatGPT to identify, clean, and prioritise 50+ high-potential B2B leads; created 3 client pitch decks, supported 2 live pitches, and drove outreach through targeted marketing audits."
-    },
-
-    {
-      name:
-        "Consumer Research on Sunscreen Brand Switching",
-      description:
-        "Executed an end-to-end marketing research study by designing the research methodology, surveying 200+ respondents, and analysing consumer behaviour to identify drivers of sunscreen brand switching."
-    },
-
-    {
-      name:
-        "Customer Purchase Behaviour Analytics Dashboard",
-      description:
-        "Developed an interactive customer analytics dashboard using Power Query, Power Pivot, and DAX, integrating 3 relational datasets, creating 20+ measures, and visualising customer behaviour, product performance, and campaign effectiveness."
-    }
-  ],
-
-  certifications: [
-    "Inbound Marketing Certification – HubSpot Academy, 2026",
-    "Marketing & Retail Analytics – Great Learning, 2026",
-    "Smart Marketing with Price Psychology – Udemy, 2025",
-    "AI Tools & ChatGPT Workshop – BE10X, 2026",
-    "Data Analytics Job Simulation – Deloitte (Forage), 2026"
-  ],
-
-  skills: [
-    "Marketing Analytics - Excel (Power Query, Power Pivot, DAX), Power BI, Tableau, SQL (Basic)",
-    "Marketing Communication – Canva, Microsoft PowerPoint, Presentation Design, Visual Communication",
-    "AI & Digital Productivity – ChatGPT, Gemini, Claude, Google AI Studio",
-    "Office Productivity – Microsoft Excel, PowerPoint, Word, Outlook",
-    "Soft Skills – Stakeholder Management, Leadership, Ownership"
-  ],
-
-  achievements: [
-    "Runner-up – Concord, Intra-College Competition, IMT Nagpur (2026)",
-    "Rajya Puraskar Award – Conferred by the Hon'ble Governor of West Bengal for achieving the Rajya Puraskar level in Bharat Scouts & Guides",
-    "Jila Puraskar – West Calcutta District Association, Bharat Scouts & Guides"
-  ],
-
-  extracurricular: [
-    "Institution Industry Partnership Cell (IIPC), IMT Nagpur",
-    "Contributed to 2 flagship conclaves, 20+ guest lectures, and an industrial visit by managing 30+ LinkedIn communications, corporate guest coordination, event scripting, logistics, and mess budgeting.",
-    "Cubmaster | Bharat Scouts & Guides",
-    "Mentored 220+ Cubs and Bulbuls through weekly leadership and life-skills sessions for 15 months, served as Camp Chief for a 50-participant one-day camp, and contributed to student evaluations and school activities.",
-    "Bharat Scouts & Guides",
-    "Active member for 10+ years; represented West Bengal as Contingent Leader at the 2nd Indo-Bangladesh Scout Friendship Camp."
-  ],
-
-  other: [
-    "Languages Known: Hindi, English and Bengali",
-    "Hobbies & Interests: Brand Storytelling, Geopolitics & Global Affairs, Film & Music Analysis"
-  ]
-};
-
-
-/* =========================================================
    GENERAL HELPERS
    ========================================================= */
 
@@ -281,6 +180,53 @@ function extractVisibleText(documentXml) {
 function visibleCharacterCount(documentXml) {
   return extractVisibleText(documentXml).length;
 }
+function conservativePageBudget(
+  documentXml
+) {
+  const marker =
+    "<w:lastRenderedPageBreak";
+
+  const markerIndex =
+    documentXml.indexOf(
+      marker
+    );
+
+  if (
+    markerIndex < 0
+  ) {
+    throw new Error(
+      "ONE_PAGE_NOT_ACHIEVABLE: master template has no first-page render marker"
+    );
+  }
+
+  const pageOneXml =
+    documentXml.slice(
+      0,
+      markerIndex
+    );
+
+  const pageOneChars =
+    visibleCharacterCount(
+      pageOneXml
+    );
+
+  if (
+    pageOneChars < 1
+  ) {
+    throw new Error(
+      "ONE_PAGE_NOT_ACHIEVABLE: unable to calculate master page-one content budget"
+    );
+  }
+
+  return Math.min(
+    MAX_ONE_PAGE_CHARS,
+    Math.floor(
+      pageOneChars *
+      SAFE_PAGE_RATIO
+    )
+  );
+}
+
 
 
 /* =========================================================
@@ -497,7 +443,6 @@ async function findMasterCvFile() {
   if (fallback) {
     return fallback;
   }
-
   const availableFiles =
     files
       .map(
@@ -567,6 +512,58 @@ async function uploadStorageFile(
   return response.json();
 }
 
+function createStorageClient() {
+  requireEnv(
+    "APPWRITE_API_KEY",
+    APPWRITE_API_KEY
+  );
+
+  const client =
+    new Client()
+      .setEndpoint(
+        APPWRITE_ENDPOINT
+      )
+      .setProject(
+        APPWRITE_PROJECT_ID
+      )
+      .setKey(
+        APPWRITE_API_KEY
+      );
+
+  return new Storage(
+    client
+  );
+}
+
+async function updateStorageFileName(
+  fileId,
+  name
+) {
+  const storage =
+    createStorageClient();
+
+  return storage.updateFile({
+    bucketId:
+      RESUME_BUCKET_ID,
+    fileId,
+    name
+  });
+}
+
+async function deleteStorageFile(
+  fileId
+) {
+  const storage =
+    createStorageClient();
+
+  await storage.deleteFile({
+    bucketId:
+      RESUME_BUCKET_ID,
+    fileId
+  });
+}
+
+
 
 /* =========================================================
    DOCX ZIP/XML
@@ -626,8 +623,9 @@ async function prepareDocxZip(
   documentXml
 ) {
   /*
-   * Remove stale rendered page-break
-   * information from document XML.
+   * Remove stale Word cached pagination markers from the
+   * document XML only. No styles/settings/header/footer/media
+   * files are changed.
    */
   documentXml =
     documentXml.replace(
@@ -639,33 +637,6 @@ async function prepareDocxZip(
     "word/document.xml",
     documentXml
   );
-
-  /*
-   * Remove cached compatibility pagination
-   * information if present.
-   */
-  const settingsEntry =
-    zip.file(
-      "word/settings.xml"
-    );
-
-  if (settingsEntry) {
-    let settingsXml =
-      await settingsEntry.async(
-        "string"
-      );
-
-    settingsXml =
-      settingsXml.replace(
-        /<w:compatSetting[^>]*name="compatibilityMode"[^>]*\/>/g,
-        ""
-      );
-
-    zip.file(
-      "word/settings.xml",
-      settingsXml
-    );
-  }
 
   return zip;
 }
@@ -997,7 +968,6 @@ Return ONLY valid JSON in exactly this structure:
   "achievementsToRemove": [
     "P<number>"
   ],
-
   "skillsToRemove": [
     "P<number>"
   ],
@@ -1497,8 +1467,7 @@ function deterministicTrim(
       if (
         isProtectedParagraph(
           paragraph
-        )
-      ) {
+        )      ) {
         continue;
       }
 
@@ -1835,14 +1804,20 @@ async function verifyGitHubActionsIdentity(req) {
   const authorization =
     getAuthorizationHeader(req);
 
-  if (!authorization.startsWith("Bearer ")) {
+  if (
+    !authorization.startsWith(
+      "Bearer "
+    )
+  ) {
     throw new Error(
       "RENDER_SOURCE_UNAUTHORIZED: missing GitHub OIDC bearer token"
     );
   }
 
   const token =
-    authorization.slice("Bearer ".length).trim();
+    authorization.slice(
+      "Bearer ".length
+    ).trim();
 
   if (!token) {
     throw new Error(
@@ -1862,13 +1837,19 @@ async function verifyGitHubActionsIdentity(req) {
       }
     );
 
-  if (payload.repository !== GITHUB_REPOSITORY) {
+  if (
+    payload.repository !==
+    GITHUB_REPOSITORY
+  ) {
     throw new Error(
       "RENDER_SOURCE_FORBIDDEN: GitHub repository does not match"
     );
   }
 
-  if (payload.workflow_ref !== GITHUB_WORKFLOW_REF) {
+  if (
+    payload.workflow_ref !==
+    GITHUB_WORKFLOW_REF
+  ) {
     throw new Error(
       "RENDER_SOURCE_FORBIDDEN: GitHub workflow does not match"
     );
@@ -1876,7 +1857,8 @@ async function verifyGitHubActionsIdentity(req) {
 
   if (
     payload.ref &&
-    payload.ref !== "refs/heads/main"
+    payload.ref !==
+      "refs/heads/main"
   ) {
     throw new Error(
       "RENDER_SOURCE_FORBIDDEN: GitHub ref is not main"
@@ -1886,21 +1868,49 @@ async function verifyGitHubActionsIdentity(req) {
   return payload;
 }
 
-async function findLatestCustomizedCvFile() {
+function parseJsonBody(req) {
+  const raw =
+    req?.body ?? "";
+
+  if (!raw) {
+    return {};
+  }
+
+  if (
+    typeof raw ===
+    "object"
+  ) {
+    return raw;
+  }
+
+  try {
+    return JSON.parse(
+      String(raw)
+    );
+  } catch {
+    throw new Error(
+      "INVALID_JSON_BODY"
+    );
+  }
+}
+
+async function findPendingCvFile() {
   const files =
     await listStorageFiles();
 
   const candidates =
     files.filter(
-      (file) => {
-        const name =
-          normalize(file.name);
-
-        return (
-          name.startsWith("CUSTOMIZED-") &&
-          name.toLowerCase().endsWith(".docx")
-        );
-      }
+      (file) =>
+        normalize(
+          file.name
+        ).startsWith(
+          PENDING_CV_PREFIX
+        ) &&
+        normalize(
+          file.name
+        ).toLowerCase().endsWith(
+          ".docx"
+        )
     );
 
   candidates.sort(
@@ -1919,42 +1929,184 @@ async function findLatestCustomizedCvFile() {
           0
         ).getTime();
 
-      return bTime - aTime;
+      return aTime - bTime;
     }
   );
 
-  if (!candidates.length) {
-    throw new Error(
-      "RENDER_SOURCE_NOT_FOUND: no customized CV DOCX exists in the Resume Files bucket"
-    );
-  }
-
-  return candidates[0];
+  return (
+    candidates[0] ||
+    null
+  );
 }
 
-async function getRenderSource(req) {
-  await verifyGitHubActionsIdentity(req);
+async function getRenderSource(
+  req
+) {
+  await verifyGitHubActionsIdentity(
+    req
+  );
 
   const file =
-    await findLatestCustomizedCvFile();
+    await findPendingCvFile();
+
+  if (!file) {
+    return {
+      status:
+        "NO_CV_AVAILABLE"
+    };
+  }
 
   const buffer =
-    await downloadStorageFile(file.$id);
+    await downloadStorageFile(
+      file.$id
+    );
 
   return {
-    status: "SUCCESS",
+    status:
+      "SUCCESS",
+
     file: {
-      id: file.$id,
-      name: file.name,
+      id:
+        file.$id,
+
+      name:
+        file.name,
+
       created_at:
         file.$createdAt ||
         file.createdAt ||
         null,
-      bytes: buffer.length
+
+      bytes:
+        buffer.length
     },
-    encoding: "base64",
+
+    encoding:
+      "base64",
+
     content:
-      buffer.toString("base64")
+      buffer.toString(
+        "base64"
+      )
+  };
+}
+
+async function finalizeRenderResult(
+  req
+) {
+  await verifyGitHubActionsIdentity(
+    req
+  );
+
+  const body =
+    parseJsonBody(
+      req
+    );
+
+  const fileId =
+    normalize(
+      body.fileId
+    );
+
+  const pages =
+    Number(
+      body.pages
+    );
+
+  if (!fileId) {
+    throw new Error(
+      "RENDER_RESULT_MISSING_FILE_ID"
+    );
+  }
+
+  if (
+    !Number.isInteger(
+      pages
+    ) ||
+    pages < 1
+  ) {
+    throw new Error(
+      "RENDER_RESULT_INVALID_PAGE_COUNT"
+    );
+  }
+
+  const storage =
+    createStorageClient();
+
+  const file =
+    await storage.getFile({
+      bucketId:
+        RESUME_BUCKET_ID,
+      fileId
+    });
+
+  if (
+    !normalize(
+      file.name
+    ).startsWith(
+      PENDING_CV_PREFIX
+    )
+  ) {
+    throw new Error(
+      "RENDER_RESULT_FILE_NOT_PENDING"
+    );
+  }
+
+  if (
+    pages ===
+    1
+  ) {
+    const finalName =
+      normalize(
+        file.name
+      ).slice(
+        PENDING_CV_PREFIX.length
+      );
+
+    const renamed =
+      await storage.updateFile({
+        bucketId:
+          RESUME_BUCKET_ID,
+        fileId,
+        name:
+          finalName.startsWith(
+            FINAL_CV_PREFIX
+          )
+            ? finalName
+            : FINAL_CV_PREFIX +
+              finalName
+      });
+
+    return {
+      status:
+        "VALIDATED",
+
+      pages,
+
+      file: {
+        id:
+          renamed.$id,
+
+        name:
+          renamed.name
+      }
+    };
+  }
+
+  await storage.deleteFile({
+    bucketId:
+      RESUME_BUCKET_ID,
+    fileId
+  });
+
+  return {
+    status:
+      "REJECTED",
+
+    pages,
+
+    file_id:
+      fileId
   };
 }
 
@@ -1963,7 +2115,7 @@ async function getRenderSource(req) {
    MAIN CUSTOMIZATION FLOW
    ========================================================= */
 
-async function customizeResume() {
+async function customizeResume(req) {
   requireEnv(
     "APPWRITE_API_KEY",
     APPWRITE_API_KEY
@@ -1980,25 +2132,68 @@ async function customizeResume() {
    * -------------------------------------------------------
    */
 
+  const requestBody =
+    parseJsonBody(
+      req
+    );
+
   const jobs =
     await getJobs();
 
   /*
    * -------------------------------------------------------
-   * 2. Select best eligible job
+   * 2. Select exact job when requested,
+   *    otherwise select the best available job.
    * -------------------------------------------------------
    */
 
-  const job =
-    selectBestJob(
-      jobs
-    );
+  let job = null;
+
+  if (
+    requestBody.jobId
+  ) {
+    const tables =
+      createTablesClient();
+
+    job =
+      await tables.getRow(
+        DATABASE_ID,
+        JOBS_TABLE_ID,
+        String(
+          requestBody.jobId
+        )
+      );
+
+    const eligibility =
+      job.eligibility_status ??
+      job.eligibilityStatus ??
+      job.eligible;
+
+    if (
+      String(
+        eligibility ??
+        ""
+      ).toUpperCase() ===
+      "NOT_ELIGIBLE"
+    ) {
+      return {
+        status:
+          "FAILED",
+        error:
+          "JOB_NOT_ELIGIBLE"
+      };
+    }
+  } else {
+    job =
+      selectBestJob(
+        jobs
+      );
+  }
 
   if (!job) {
     return {
       status:
         "FAILED",
-
       error:
         "NO_ELIGIBLE_JOB_FOUND"
     };
@@ -2070,12 +2265,17 @@ async function customizeResume() {
 
   /*
    * -------------------------------------------------------
-   * 7. Build paragraph map
+   * 7. Build paragraph map and conservative page budget
    * -------------------------------------------------------
    */
 
   const paragraphs =
     getParagraphTexts(
+      documentXml
+    );
+
+  const safePageBudget =
+    conservativePageBudget(
       documentXml
     );
 
@@ -2098,7 +2298,7 @@ async function customizeResume() {
       paragraphs,
 
       maxChars:
-        MAX_ONE_PAGE_CHARS
+        safePageBudget
     });
 
   /*
@@ -2138,7 +2338,7 @@ async function customizeResume() {
     customizedXml =
       deterministicTrim(
         customizedXml,
-        MAX_ONE_PAGE_CHARS
+        safePageBudget
       );
 
     customizedChars =
@@ -2155,10 +2355,10 @@ async function customizeResume() {
 
   if (
     customizedChars >
-    MAX_ONE_PAGE_CHARS
+    safePageBudget
   ) {
     throw new Error(
-      `ONE_PAGE_GATE_FAILED: customized content remained at ${customizedChars} characters; maximum allowed is ${MAX_ONE_PAGE_CHARS}. No CV was uploaded.`
+      `ONE_PAGE_NOT_ACHIEVABLE: customized content remained at ${customizedChars} characters; conservative master-template safe budget is ${safePageBudget}. No CV was uploaded.`
     );
   }
 
@@ -2246,7 +2446,7 @@ async function customizeResume() {
       );
 
   const outputFilename =
-    `CUSTOMIZED-${company}-${jobTitle}-${timestamp}.docx`;
+    `${PENDING_CV_PREFIX}${company}-${jobTitle}-${timestamp}.docx`;
 
   /*
    * -------------------------------------------------------
@@ -2270,10 +2470,10 @@ async function customizeResume() {
 
   return {
     status:
-      "SUCCESS",
+      "PENDING_RENDER_VALIDATION",
 
     message:
-      "Customized resume created successfully without modifying the master CV.",
+      "Customized CV created and queued for real rendered one-page validation. It is not final until the renderer validates exactly one page.",
 
     job: {
       id:
@@ -2321,7 +2521,7 @@ async function customizeResume() {
 
     content_budget: {
       maximum_visible_characters:
-        MAX_ONE_PAGE_CHARS,
+        safePageBudget,
 
       actual_visible_characters:
         customizedChars,
@@ -2334,8 +2534,12 @@ async function customizeResume() {
         )
     },
 
-    note:
-      "The 3,000-character gate is a conservative content proxy for the one-page requirement. It does not by itself prove rendered pagination is exactly one page."
+    one_page_validation: {
+      status:
+        "PENDING",
+      method:
+        "conservative master-template content budget followed by LibreOffice rendered page-count validation"
+    }
   };
 }
 
@@ -2349,30 +2553,76 @@ export default async function main({
   res
 }) {
   try {
-    if (req?.path === "/render-source") {
+    const path =
+      req?.path ||
+      "";
+
+    if (
+      path ===
+      "/render-source"
+    ) {
       if (
-        String(req?.method || "GET").toUpperCase() !==
+        String(
+          req?.method ||
+          "GET"
+        ).toUpperCase() !==
         "GET"
       ) {
         return res.json(
           {
-            status: "FAILED",
-            error: "METHOD_NOT_ALLOWED"
+            status:
+              "FAILED",
+            error:
+              "METHOD_NOT_ALLOWED"
           },
           405
         );
       }
 
-      const result =
-        await getRenderSource(req);
+      return res.json(
+        await getRenderSource(
+          req
+        )
+      );
+    }
 
-      return res.json(result);
+    if (
+      path ===
+      "/render-result"
+    ) {
+      if (
+        String(
+          req?.method ||
+          "POST"
+        ).toUpperCase() !==
+        "POST"
+      ) {
+        return res.json(
+          {
+            status:
+              "FAILED",
+            error:
+              "METHOD_NOT_ALLOWED"
+          },
+          405
+        );
+      }
+
+      return res.json(
+        await finalizeRenderResult(
+          req
+        )
+      );
     }
 
     const result =
-      await customizeResume();
+      await customizeResume(
+        req
+      );
 
-    return res.json(result);
+    return res.json(
+      result
+    );
 
   } catch (error) {
     console.error(
@@ -2397,8 +2647,10 @@ export default async function main({
 
     return res.json(
       {
-        status: "FAILED",
-        error: message
+        status:
+          "FAILED",
+        error:
+          message
       },
       status
     );
