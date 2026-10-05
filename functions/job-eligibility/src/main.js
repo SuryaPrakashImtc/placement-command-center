@@ -29,32 +29,237 @@ export default async ({ req, res, log, error }) => {
         job.job_title,
         job.department,
         job.function,
-        job.industry
+        job.industry,
+        job.job_description
       ].join(' '));
 
-      const keywords = [
+      const targetRoleSignals = [
         'marketing',
         'brand',
         'branding',
         'growth',
+        'digital marketing',
+        'product marketing',
         'sales',
         'business development',
-        'account',
+        'account executive',
+        'account management',
+        'sales development',
+        'inside sales',
+        'market research',
+        'consumer research',
+        'customer insights',
         'commercial',
         'revenue',
         'strategy',
-        'analytics',
-        'analyst',
-        'business intelligence',
-        'business analytics',
-        'data analyst',
-        'insights',
-        'market research',
-        'consumer research'
+        'business analyst',
+        'business analysis',
+        'marketing analyst',
+        'research analyst',
+        'insights analyst',
+        'marketing operations',
+        'sales operations',
+        'category management',
+        'product management',
+        'management trainee',
+        'graduate trainee'
       ];
 
-      return keywords.some(keyword =>
+      return targetRoleSignals.some(keyword =>
         text.includes(keyword)
+      );
+    }
+
+    function extractMinimumYears(job) {
+      const text = normalize([
+        job.job_title,
+        job.experience_required,
+        job.job_description
+      ].join(' '));
+
+      const values = [];
+
+      for (const match of text.matchAll(
+        /(d+(?:\.\d+)?)\s*(?:-|to)\s*(d+(?:\.\d+)?)\s*years?/g
+      )) {
+        values.push(Number(match[1]));
+      }
+
+      for (const match of text.matchAll(
+        /(\d+(?:\.\d+)?)\s*\+\s*years?/g
+      )) {
+        values.push(Number(match[1]));
+      }
+
+      for (const match of text.matchAll(
+        /minimum\s*(?:of\s*)?(\d+(?:\.\d+)?)\s*years?/g
+      )) {
+        values.push(Number(match[1]));
+      }
+
+      for (const match of text.matchAll(
+        /(\d+(?:\.\d+)?)\s*years?\s*(?:of\s*)?experience/g
+      )) {
+        values.push(Number(match[1]));
+      }
+
+      if (values.length === 0) {
+        return null;
+      }
+
+      return Math.min(...values);
+    }
+
+    function explicitlyWantsFresher(job) {
+      const text = normalize([
+        job.job_title,
+        job.experience_required,
+        job.job_description
+      ].join(' '));
+
+      const fresherSignals = [
+        'fresher',
+        'freshers',
+        'entry level',
+        'entry-level',
+        'graduate trainee',
+        'management trainee',
+        '0-1 years',
+        '0 to 1 years',
+        '0 years',
+        'no experience',
+        'fresh graduate'
+      ];
+
+      return fresherSignals.some(signal =>
+        text.includes(signal)
+      );
+    }
+
+    function clearlyTooExperienced(job) {
+      const text = normalize([
+        job.job_title,
+        job.experience_required,
+        job.job_description
+      ].join(' '));
+
+      const seniorTitlePatterns = [
+        /\bsenior\b/,
+        /\bsr\.\b/,
+        /\blead\b/,
+        /\bmanager\b/,
+        /\bhead\b/,
+        /\bdirector\b/,
+        /\bprincipal\b/,
+        /\bvice president\b/,
+        /\bavp\b/,
+        /\bregional manager\b/
+      ];
+
+      if (
+        seniorTitlePatterns.some(pattern =>
+          pattern.test(
+            normalize(job.job_title)
+          )
+        )
+      ) {
+        return true;
+      }
+
+      const minimumYears =
+        extractMinimumYears(job);
+
+      // Strict fresher gate: explicit minimum experience
+      // greater than zero is not a clean fresher fit.
+      if (
+        minimumYears !== null &&
+        minimumYears > 0
+      ) {
+        return true;
+      }
+
+      return false;
+    }
+
+    function clearlyTooTechnical(job) {
+      const title = normalize(job.job_title);
+      const text = normalize([
+        job.job_title,
+        job.department,
+        job.function,
+        job.industry,
+        job.experience_required,
+        job.education_required,
+        job.job_description
+      ].join(' '));
+
+      const technicalRolePatterns = [
+        /\bdata scientist\b/,
+        /\bdata science\b/,
+        /\bdata engineer\b/,
+        /\bmachine learning engineer\b/,
+        /\bml engineer\b/,
+        /\bsoftware engineer\b/,
+        /\bsoftware developer\b/,
+        /\bfull.?stack\b/,
+        /\bbackend developer\b/,
+        /\bfrontend developer\b/,
+        /\bdevops\b/,
+        /\bcloud engineer\b/,
+        /\bsolutions architect\b/,
+        /\bdata architect\b/,
+        /\bbi developer\b/,
+        /\bpower bi developer\b/,
+        /\betl developer\b/
+      ];
+
+      if (
+        technicalRolePatterns.some(pattern =>
+          pattern.test(title)
+        )
+      ) {
+        return true;
+      }
+
+      const hardTechnicalSkills = [
+        'python',
+        'r programming',
+        'java',
+        'c++',
+        'scala',
+        'spark',
+        'hadoop',
+        'tensorflow',
+        'pytorch',
+        'machine learning',
+        'deep learning',
+        'databricks',
+        'snowflake',
+        'dbt',
+        'airflow',
+        'kubernetes',
+        'docker',
+        'etl',
+        'sas',
+        'matlab',
+        'aws',
+        'azure',
+        'gcp'
+      ];
+
+      const technicalMatches =
+        hardTechnicalSkills.filter(skill =>
+          text.includes(skill)
+        ).length;
+
+      const analystLike =
+        title.includes('analyst') ||
+        title.includes('analytics') ||
+        title.includes('business intelligence');
+
+      return (
+        analystLike &&
+        technicalMatches >= 3
       );
     }
 
@@ -192,10 +397,6 @@ export default async ({ req, res, log, error }) => {
     }
 
     function evaluateJob(job) {
-      // ---------------------------------------------------
-      // HARD REJECTIONS
-      // ---------------------------------------------------
-
       if (!isRelevantJob(job)) {
         return 'NOT_ELIGIBLE';
       }
@@ -206,11 +407,11 @@ export default async ({ req, res, log, error }) => {
           : 'NOT_ELIGIBLE';
       }
 
-      const salaryLpa = parseSalaryLpa(
-        job.salary_range
-      );
+      const salaryLpa =
+        parseSalaryLpa(
+          job.salary_range
+        );
 
-      // Known salary below target.
       if (
         salaryLpa !== null &&
         salaryLpa < 10
@@ -218,18 +419,65 @@ export default async ({ req, res, log, error }) => {
         return 'NOT_ELIGIBLE';
       }
 
-      // Clearly senior role.
       if (clearlyTooExperienced(job)) {
         return 'NOT_ELIGIBLE';
       }
 
-      // ---------------------------------------------------
-      // PASS INITIAL SCREEN
-      // ---------------------------------------------------
-      //
-      // Unknown salary or experience is NOT a rejection.
-      // Candidate-job matching will evaluate those later.
+      if (clearlyTooTechnical(job)) {
+        return 'NOT_ELIGIBLE';
+      }
 
+      const educationText = normalize([
+        job.education_required,
+        job.job_description
+      ].join(' '));
+
+      const hardDegreeExclusions = [
+        'b.tech',
+        'btech',
+        'm.tech',
+        'mtech',
+        'computer science engineering',
+        'computer science degree',
+        'information technology degree',
+        'electronics engineering',
+        'mechanical engineering',
+        'electrical engineering'
+      ];
+
+      const anyGraduateSignals = [
+        'any graduate',
+        'any degree',
+        'bachelor',
+        'mba',
+        'pgdm',
+        'commerce',
+        'bcom',
+        'management'
+      ];
+
+      const degreeExcluded =
+        hardDegreeExclusions.some(
+          signal =>
+            educationText.includes(
+              signal
+            )
+        ) &&
+        !anyGraduateSignals.some(
+          signal =>
+            educationText.includes(
+              signal
+            )
+        );
+
+      if (degreeExcluded) {
+        return 'NOT_ELIGIBLE';
+      }
+
+      // A role that explicitly says fresher/entry-level is a
+      // strong positive signal, but absence of that wording
+      // is not itself a rejection when the JD has no hard
+      // experience requirement.
       return 'ELIGIBLE';
     }
 
