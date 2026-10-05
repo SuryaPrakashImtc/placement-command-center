@@ -62,6 +62,21 @@ const MASTER_CV_FILENAME =
  */
 const MAX_ONE_PAGE_CHARS = 3000;
 
+const DASHBOARD_ORIGIN = "*";
+
+const CORS_HEADERS = {
+  "Access-Control-Allow-Origin": DASHBOARD_ORIGIN,
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization",
+  "Vary": "Origin"
+};
+
+function respond(res, data, status = 200) {
+  return res.json(data, status, CORS_HEADERS);
+}
+
+
+
 const GEMINI_API_KEY =
   process.env.GEMINI_API_KEY;
 
