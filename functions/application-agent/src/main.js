@@ -467,11 +467,18 @@ async function approveApplication(tablesDB, storage, request) {
     },
     browser_task: {
       action: "OPEN_AND_COMPLETE_APPLICATION",
+      job_id: updated.$id,
       url: jobUrl(updated),
       upload_cv_file_id: cvFile.$id,
       upload_cv_file_name: cvFile.name,
-      submit_only_after_human_confirmation: true
-    }
+      stop_before_final_submit: true,
+      report_security_or_login_blockers: true
+    },
+    browser_goal:
+      "JOB_ID=" +
+      updated.$id +
+      " Open the application URL, complete all non-final application steps using only verified candidate information, upload the specified customized CV, and STOP before any final Submit/Send button. If a CAPTCHA, Cloudflare/Turnstile, human verification, login, phone/email verification, OTP, or other security gate blocks progress, stop and report HUMAN_INTERVENTION_REQUIRED. Never bypass a security challenge and never submit the application."
+
   };
 }
 
