@@ -291,6 +291,7 @@ function selectBestJob(jobs, files = []) {
 
     return (
       isEligible(job) &&
+      isHighMatch(job) &&
       !TERMINAL_APPLICATION_STATUSES.has(status) &&
       status === "NOT_APPLIED" &&
       Boolean(jobUrl(job)) &&
@@ -397,6 +398,19 @@ async function prepareApplication(tablesDB, storage, request) {
       status: "JOB_NOT_ELIGIBLE",
       job_id: job.$id,
       application_status: status
+    };
+  }
+
+  if (!isHighMatch(job)) {
+    return {
+      status: "JOB_NOT_HIGH_MATCH",
+      job_id: job.$id,
+      application_status: status,
+      match_status: normalize(
+        job.match_status ||
+        job.matchStatus
+      ),
+      match_score: matchScore(job)
     };
   }
 
