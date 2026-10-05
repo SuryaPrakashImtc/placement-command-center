@@ -550,20 +550,20 @@ export default async ({ req, res, error }) => {
         ""
       ).toLowerCase();
 
+    const action =
+      lower(
+        request.action ||
+        request.operation ||
+        ""
+      );
+
     const { tablesDB, storage } =
       createClients();
 
-    if (path.includes("/prepare")) {
-      return res.json(
-        await prepareApplication(
-          tablesDB,
-          storage,
-          request
-        )
-      );
-    }
-
-    if (path.includes("/approve")) {
+    if (
+      action === "approve" ||
+      path.includes("/approve")
+    ) {
       return res.json(
         await approveApplication(
           tablesDB,
@@ -573,7 +573,11 @@ export default async ({ req, res, error }) => {
       );
     }
 
-    if (path.includes("/complete")) {
+    if (
+      action === "complete" ||
+      action === "submit" ||
+      path.includes("/complete")
+    ) {
       return res.json(
         await recordSubmission(
           tablesDB,
