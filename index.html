@@ -246,7 +246,7 @@ function saveConfig(){
 }
 function clearConfig(){localStorage.removeItem(CONFIG_KEYS.dashboard);localStorage.removeItem(CONFIG_KEYS.application);document.getElementById("dashboard-api-url").value="";document.getElementById("application-agent-url").value="";setConnection(false,"Backend not connected")}
 function setConnection(ok,text){document.getElementById("connection-dot").className="dot"+(ok?" ok":"");document.getElementById("connection-text").textContent=text}
-function esc(v){return String(v??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",""":"&quot;","'":"&#039;"}[c]))}
+function esc(v){return String(v??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#039;"}[c]))}
 function tag(text,kind){return text?'<span class="tag '+kind+'">'+esc(text)+'</span>':""}
 function scoreTag(score){const n=Number(score)||0;return tag(n?Math.round(n)+"%":"—",n>=80?"green":n>=60?"blue":"amber")}
 function appTag(status){
