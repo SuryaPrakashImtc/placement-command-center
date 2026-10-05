@@ -160,7 +160,7 @@ h1,h2,h3{font-family:"Space Grotesk",sans-serif}
       <div class="grid-3" style="margin-top:12px">
         <div class="panel"><div class="panel-head"><div><div class="panel-title">System status</div><div class="panel-sub">Pipeline coverage</div></div></div><div class="pad" id="system-status"></div></div>
         <div class="panel"><div class="panel-head"><div><div class="panel-title">CV storage</div><div class="panel-sub">Resume Files bucket</div></div></div><div class="pad" id="cv-summary"></div></div>
-        <div class="panel"><div class="panel-head"><div><div class="panel-title">Recent jobs</div><div class="panel-sub">Newest discovered records</div></div></div><div id="recent-mini"></div></div>
+        <div class="panel"><div class="panel-head"><div><div class="panel-title">Job sources</div><div class="panel-sub">Where your jobs are coming from</div></div></div><div class="pad" id="source-summary"></div></div>
       </div>
     </section>
 
@@ -169,7 +169,7 @@ h1,h2,h3{font-family:"Space Grotesk",sans-serif}
         <div class="filters">
           <input id="job-search" placeholder="Search company or title…" oninput="renderJobs()">
           <select id="job-filter" onchange="renderJobs()"><option value="all">All</option><option value="eligible">Eligible</option><option value="high">High match</option><option value="priority">Priority</option><option value="ready">CV ready</option><option value="not_applied">Not applied</option></select>
-          <select id="job-sort" onchange="renderJobs()"><option value="best">Best match</option><option value="newest">Newest</option></option></select>
+          <select id="job-sort" onchange="renderJobs()"><option value="best">Best match</option><option value="newest">Newest</option></select>
         </div>
         <div class="table-wrap"><table class="table"><thead><tr><th>Role</th><th>Match</th><th>Opportunity</th><th>Eligibility</th><th>Application</th><th>CV</th><th></th></tr></thead><tbody id="jobs-table"></tbody></table></div>
       </div>
@@ -308,7 +308,7 @@ async function refreshDashboard(){
   try{
     setConnection(false,"Refreshing…");
     state.data=await apiGet(cfg.dashboard);
-    state.jobs=state.data.recent_jobs||[];
+    state.jobs=state.data.all_jobs||state.data.recent_jobs||[];
     state.applications=state.data.applications||[];
     state.opportunities=state.data.opportunities||[];
     setConnection(true,"Live · "+new Date().toLocaleTimeString());
@@ -322,7 +322,7 @@ async function refreshDashboard(){
 
 function renderEmptyState(){
   const msg="Connect the dashboard-api function in Settings to load live data.";
-  ["top-ready","attention-list","recent-mini","system-status","cv-summary","cv-detail","applications-list"].forEach(id=>{const el=document.getElementById(id);if(el)el.innerHTML='<div class="empty">'+msg+"</div>"});
+  ["top-ready","attention-list","recent-mini","source-summary","system-status","cv-summary","cv-detail","applications-list"].forEach(id=>{const el=document.getElementById(id);if(el)el.innerHTML='<div class="empty">'+msg+"</div>"});
   document.getElementById("jobs-table").innerHTML='<tr><td colspan="7"><div class="empty">'+msg+"</div></td></tr>";
   document.getElementById("opps-table").innerHTML='<tr><td colspan="7"><div class="empty">'+msg+"</div></td></tr>";
 }
@@ -367,7 +367,8 @@ function renderAll(){
   ].map(([a,b])=>'<div class="stat-row"><span>'+a+'</span><span class="mini-value">'+b+"</span></div>").join("");
 
   const recent=state.data.recent_jobs||[];
-  document.getElementById("recent-mini").innerHTML=recent.slice(0,5).map(j=>'<div class="item"><div class="item-title">'+esc(j.title)+'</div><div class="item-company">'+esc(j.company)+' · '+esc(j.source)+'</div><div class="item-meta">'+scoreTag(j.match_score)+' '+tag(j.application_status||"NOT APPLIED","blue")+'</div></div>').join("")||'<div class="empty">No recent jobs.</div>';
+  const sourceCounts=state.data.source_counts||{};
+  document.getElementById("source-summary").innerHTML=Object.entries(sourceCounts).sort((a,b)=>b[1]-a[1]).map(([source,count])=>'<div class="stat-row"><span>'+esc(source)+'</span><span class="mini-value">'+count+'</span></div>').join("")||'<div class="empty">No source data.</div>';
 
   renderJobs();renderApplications();renderOpportunities();
 }
