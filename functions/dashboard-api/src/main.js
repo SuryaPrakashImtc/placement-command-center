@@ -1,4 +1,4 @@
-import { Client, Query, Storage, TablesDB } from "node-appwrite";
+import { Client, Query, Storage, TablesDB, Tokens } from "node-appwrite";
 
 const APPWRITE_ENDPOINT =
   process.env.APPWRITE_ENDPOINT ||
@@ -300,6 +300,59 @@ function compactJob(job, cvReady) {
   };
 }
 
+function cvFileKind(name) {
+  const n = lower(name);
+  if (n === "master cv fp.docx") {
+    return "MASTER";
+  }
+  if (n.startsWith(FINAL_CV_PREFIX.toLowerCase())) {
+    return "CUSTOMIZED";
+  }
+  if (n.startsWith(PENDING_CV_PREFIX.toLowerCase())) {
+    return "PENDING";
+  }
+  return "OTHER";
+}
+
+function parseCustomizedCvName(name) {
+  const raw = normalize(name)
+    .replace(/^customized-/i, "")
+    .replace(/\.docx$/i, "");
+
+  const stampIndex =
+    raw.search(
+      /-\d{4}-\d{2}-\d{2}t/i
+    );
+
+  const withoutStamp =
+    stampIndex >= 0
+      ? raw.slice(0, stampIndex)
+      : raw;
+
+  const parts =
+    withoutStamp.split("-");
+
+  if (parts.length < 2) {
+    return {
+      company: withoutStamp,
+      role: ""
+    };
+  }
+
+  const company =
+    parts
+      .slice(0, -1)
+      .join(" ");
+
+  const role =
+    parts[parts.length - 1];
+
+  return {
+    company,
+    role
+  };
+}
+
 function compactOpportunity(row) {
   return {
     id: row.$id,
@@ -373,6 +426,9 @@ export default async ({ req, res, error }) => {
     const storage =
       new Storage(client);
 
+    const tokens =
+      new Tokens(client);
+
     const jobs =
       await listAllRows(
         tablesDB,
@@ -389,6 +445,99 @@ export default async ({ req, res, error }) => {
       await listResumeFiles(
         storage
       );
+
+    const cvFiles =
+      [];
+
+    for (const file of resumeFiles) {
+      const kind =
+        cvFileKind(file.name);
+
+      if (
+        ![
+          "MASTER",
+          "CUSTOMIZED",
+          "PENDING"
+        ].includes(kind)
+      ) {
+        continue;
+      }
+
+      let downloadUrl = null;
+
+      try {
+        const expire =
+          new Date(
+            Date.now() +
+            20 * 60 * 1000
+          ).toISOString();
+
+        const token =
+          await tokens.createFileToken({
+            bucketId:
+              RESUME_BUCKET_ID,
+            fileId:
+              file.$id,
+            expire
+          });
+
+        downloadUrl =
+          APPWRITE_ENDPOINT +
+          "/storage/buckets/" +
+          encodeURIComponent(
+            RESUME_BUCKET_ID
+          ) +
+          "/files/" +
+          encodeURIComponent(
+            file.$id
+          ) +
+          "/download?project=" +
+          encodeURIComponent(
+            APPWRITE_PROJECT_ID
+          ) +
+          "&token=" +
+          encodeURIComponent(
+            token.secret
+          );
+      } catch {
+        downloadUrl = null;
+      }
+
+      const parsed =
+        kind === "CUSTOMIZED"
+          ? parseCustomizedCvName(
+              file.name
+            )
+          : {
+              company:
+                kind === "MASTER"
+                  ? "Master CV"
+                  : "Pending validation",
+              role: ""
+            };
+
+      cvFiles.push({
+        id:
+          file.$id,
+        file_name:
+          file.name,
+        kind,
+        company:
+          parsed.company,
+        role:
+          parsed.role,
+        created_at:
+          file.$createdAt ||
+          file.createdAt ||
+          null,
+        size:
+          file.sizeOriginal ||
+          file.size ||
+          null,
+        download_url:
+          downloadUrl
+      });
+    }
 
     const cvReadyByJob =
       new Map();
@@ -611,6 +760,9 @@ export default async ({ req, res, error }) => {
 
       application_statuses:
         applicationStatuses,
+
+      cv_files:
+        cvFiles,
 
       cv: {
         master:
