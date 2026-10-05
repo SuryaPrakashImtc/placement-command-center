@@ -33,6 +33,9 @@ const TERMINAL_APPLICATION_STATUSES = new Set([
   "WITHDRAWN"
 ]);
 
+const HUMAN_INTERVENTION_STATUS =
+  "HUMAN_INTERVENTION_REQUIRED";
+
 function requireEnv(name, value) {
   if (!value) {
     throw new Error("MISSING_ENV_" + name);
@@ -472,6 +475,100 @@ async function approveApplication(tablesDB, storage, request) {
   };
 }
 
+async function markHumanIntervention(tablesDB, request) {
+  const jobId = normalize(request.jobId);
+
+  if (!jobId) {
+    throw new Error("JOB_ID_REQUIRED");
+  }
+
+  const reason =
+    normalize(request.reason) ||
+    "Browser automation encountered a site verification, CAPTCHA, login, or other step requiring human intervention.";
+
+  const job = await getJob(
+    tablesDB,
+    jobId
+  );
+
+  const currentStatus =
+    applicationStatus(job);
+
+  if (
+    currentStatus !== "APPROVED_FOR_SUBMISSION" &&
+    currentStatus !== HUMAN_INTERVENTION_STATUS
+  ) {
+    return {
+      status: "INTERVENTION_STATUS_BLOCKED",
+      job_id: jobId,
+      application_status: currentStatus
+    };
+  }
+
+  const updated =
+    await updateApplicationStatus(
+      tablesDB,
+      jobId,
+      HUMAN_INTERVENTION_STATUS
+    );
+
+  return {
+    status: HUMAN_INTERVENTION_STATUS,
+    job_id: updated.$id,
+    company: companyName(updated),
+    job_title: jobTitle(updated),
+    job_url: jobUrl(updated),
+    application_status:
+      applicationStatus(updated),
+    intervention_required: true,
+    intervention_reason: reason,
+    next_action:
+      "Human must resolve the website blocker before browser automation can continue."
+  };
+}
+
+async function resumeAfterHumanIntervention(tablesDB, request) {
+  const jobId = normalize(request.jobId);
+
+  if (!jobId) {
+    throw new Error("JOB_ID_REQUIRED");
+  }
+
+  const job = await getJob(
+    tablesDB,
+    jobId
+  );
+
+  if (
+    applicationStatus(job) !==
+    HUMAN_INTERVENTION_STATUS
+  ) {
+    return {
+      status: "RESUME_NOT_ALLOWED",
+      job_id: jobId,
+      application_status:
+        applicationStatus(job)
+    };
+  }
+
+  const updated =
+    await updateApplicationStatus(
+      tablesDB,
+      jobId,
+      "APPROVED_FOR_SUBMISSION"
+    );
+
+  return {
+    status: "RESUMED_AFTER_HUMAN_INTERVENTION",
+    job_id: updated.$id,
+    company: companyName(updated),
+    job_title: jobTitle(updated),
+    job_url: jobUrl(updated),
+    application_status:
+      applicationStatus(updated)
+  };
+}
+
 async function recordSubmission(tablesDB, request) {
   const jobId = normalize(request.jobId);
 
@@ -568,6 +665,32 @@ export default async ({ req, res, error }) => {
         await approveApplication(
           tablesDB,
           storage,
+          request
+        )
+      );
+    }
+
+    if (
+      action === "intervention" ||
+      action === "human_intervention" ||
+      path.includes("/intervention")
+    ) {
+      return res.json(
+        await markHumanIntervention(
+          tablesDB,
+          request
+        )
+      );
+    }
+
+    if (
+      action === "resume" ||
+      action === "resume_after_intervention" ||
+      path.includes("/resume")
+    ) {
+      return res.json(
+        await resumeAfterHumanIntervention(
+          tablesDB,
           request
         )
       );
