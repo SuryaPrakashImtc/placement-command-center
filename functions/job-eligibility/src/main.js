@@ -280,9 +280,15 @@ export default async ({ req, res, log, error }) => {
         return true;
       }
 
-      // "Anywhere" is not automatically India.
-      if (location === 'anywhere') {
-        return false;
+      if (
+        location === 'anywhere' ||
+        location === 'remote' ||
+        location === 'worldwide' ||
+        location === 'global' ||
+        location.includes('remote') ||
+        normalize(job.work_mode).includes('remote')
+      ) {
+        return true;
       }
 
       const indiaTerms = [
