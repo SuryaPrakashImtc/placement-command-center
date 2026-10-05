@@ -40,7 +40,7 @@ jobs:
           test "$token" != "null"
           echo "token=$token" >> "$GITHUB_OUTPUT"
 
-      - name: Fetch latest customized CV from Appwrite
+      - name: Fetch pending customized CV from Appwrite
         id: source
         env:
           OIDC_TOKEN: ${{ steps.oidc.outputs.token }}
@@ -52,18 +52,22 @@ jobs:
           status=$(jq -r '.status // "FAILED"' render-source.json)
 
           if [ "$status" = "NO_CV_AVAILABLE" ]; then
-            echo "No customized CV is currently waiting for render validation."
+            echo "No pending customized CV requires validation."
             echo "available=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           jq -e '.status == "SUCCESS"' render-source.json >/dev/null
+
+          file_id=$(jq -r '.file.id' render-source.json)
+          file_name=$(jq -r '.file.name' render-source.json)
+
           jq -r '.content' render-source.json | base64 -d > input/resume.docx
           test -s input/resume.docx
 
           echo "available=true" >> "$GITHUB_OUTPUT"
-          echo "Source: $(jq -r '.file.name' render-source.json)"
-          echo "Bytes:  $(jq -r '.file.bytes' render-source.json)"
+          echo "file_id=$file_id" >> "$GITHUB_OUTPUT"
+          echo "file_name=$file_name" >> "$GITHUB_OUTPUT"
 
       - name: Render DOCX to PDF
         if: steps.source.outputs.available == 'true'
@@ -80,15 +84,27 @@ jobs:
           test -n "$pages"
           echo "pages=$pages" >> "$GITHUB_OUTPUT"
 
-      - name: Enforce one-page CV
+      - name: Finalize render result in Appwrite
         if: steps.source.outputs.available == 'true'
+        env:
+          OIDC_TOKEN: ${{ steps.oidc.outputs.token }}
+          APPWRITE_FUNCTION_URL: https://placement-command-center-ixkc.sgp.appwrite.run/render-result
+          FILE_ID: ${{ steps.source.outputs.file_id }}
+          PAGES: ${{ steps.pages.outputs.pages }}
         run: |
-          if [ "${{ steps.pages.outputs.pages }}" -ne 1 ]; then
-            echo "FAILED: rendered CV is ${{ steps.pages.outputs.pages }} pages; exactly 1 page is required."
-            exit 1
+          result=$(curl --fail --silent --show-error --location             -X POST             -H "Authorization: Bearer $OIDC_TOKEN"             -H "Content-Type: application/json"             --data "{"fileId":"$FILE_ID","pages":$PAGES}"             "$APPWRITE_FUNCTION_URL")
+
+          echo "$result" | jq .
+
+          status=$(echo "$result" | jq -r '.status // "FAILED"')
+
+          if [ "$status" = "VALIDATED" ] && [ "$PAGES" -eq 1 ]; then
+            echo "PASS: rendered CV is exactly 1 page."
+            exit 0
           fi
 
-          echo "PASS: rendered CV is exactly 1 page."
+          echo "FAILED: CV did not pass final one-page validation."
+          exit 1
 
       - name: Cleanup private render files
         if: always()
