@@ -750,7 +750,7 @@ export default async ({ req, res, log, error }) => {
       const match =
         xml.match(
           new RegExp(
-            `<${tagName}[^>]*>([\\\\s\\\\S]*?)</${tagName}>`,
+            `<${tagName}[^>]*>([\\s\\S]*?)</${tagName}>`,
             'i'
           )
         );
@@ -759,7 +759,7 @@ export default async ({ req, res, log, error }) => {
 
       return String(match[1])
         .replace(
-          /^<!\\[CDATA\\[|\\]\\]>$/g,
+          /^<!\[CDATA\[|\]\]>$/g,
           ''
         )
         .replace(
@@ -787,7 +787,7 @@ export default async ({ req, res, log, error }) => {
           '>'
         )
         .replace(
-          /\\s+/g,
+          /\s+/g,
           ' '
         )
         .trim();
@@ -816,7 +816,7 @@ export default async ({ req, res, log, error }) => {
 
       const items =
         xml.match(
-          /<item>[\\s\\S]*?<\\/item>/gi
+          /<item>[\s\S]*?<\/item>/gi
         ) || [];
 
       wwrFound = items.length;
