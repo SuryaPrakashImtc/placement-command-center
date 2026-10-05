@@ -11,8 +11,7 @@ const APPWRITE_PROJECT_ID =
   "6aa03ac3003c12018958";
 
 const APPWRITE_API_KEY =
-  process.env.JOB_AUTOMATION_API_KEY ||
-  process.env.APPWRITE_API_KEY;
+  process.env.JOB_AUTOMATION_API_KEY;
 
 const DATABASE_ID =
   process.env.APPWRITE_DATABASE_ID ||
