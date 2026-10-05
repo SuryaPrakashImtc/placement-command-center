@@ -118,8 +118,9 @@ h1,h2,h3{font-family:"Space Grotesk",sans-serif}
         <div class="subtitle" id="page-subtitle">Your external job search, applications and interventions in one place.</div>
       </div>
       <div class="top-actions">
-        <button class="btn" onclick="refreshDashboard()"><i class="ti ti-refresh"></i> Refresh</button>
-        <button class="btn primary" onclick="prepareNext()"><i class="ti ti-sparkles"></i> Prepare next</button>
+        <button class="btn" id="refresh-btn" onclick="refreshDashboard()"><i class="ti ti-refresh"></i> Refresh</button>
+        <button class="btn primary" onclick="prepareNext()"><i class="ti ti-sparkles"></i> Find next application</button>
+        <span id="last-updated" class="panel-sub" style="align-self:center"></span>
       </div>
     </div>
 
@@ -168,14 +169,15 @@ h1,h2,h3{font-family:"Space Grotesk",sans-serif}
       <div class="panel">
         <div class="filters">
           <input id="job-search" placeholder="Search company or title…" oninput="renderJobs()">
-          <select id="job-filter" onchange="renderJobs()"><option value="all">All</option><option value="eligible">Eligible</option><option value="high">High match</option><option value="priority">Priority</option><option value="ready">CV ready</option><option value="not_applied">Not applied</option></select>
+          <select id="job-filter" onchange="renderJobs()"><option value="eligible" selected>Eligible only</option><option value="all">All jobs (audit)</option><option value="high">High match</option><option value="priority">Priority</option><option value="ready">CV ready</option><option value="not_applied">Not applied</option></select>
           <select id="job-sort" onchange="renderJobs()"><option value="best">Best match</option><option value="newest">Newest</option></select>
         </div>
-        <div class="table-wrap"><table class="table"><thead><tr><th>Role</th><th>Match</th><th>Opportunity</th><th>Eligibility</th><th>Application</th><th>CV</th><th></th></tr></thead><tbody id="jobs-table"></tbody></table></div>
+        <div class="table-wrap"><table class="table"><thead><tr><th>#</th><th>Role</th><th>Match</th><th>Opportunity</th><th>Eligibility</th><th>Application</th><th>CV</th><th>Action</th></tr></thead><tbody id="jobs-table"></tbody></table></div>
       </div>
     </section>
 
     <section class="page" id="page-applications">
+      <div class="notice info"><div class="notice-icon">ℹ️</div><div class="notice-body"><div class="notice-title">Browser handoff</div><div class="notice-text">The dashboard prepares and tracks the browser task. Actual browser automation is currently run through the connected ChatGPT/TinyFish session, not launched automatically from this webpage.</div></div></div>
       <div id="application-alerts"></div>
       <div class="panel">
         <div class="panel-head"><div><div class="panel-title">Application queue</div><div class="panel-sub">Approval, browser and submission states</div></div></div>
@@ -186,19 +188,31 @@ h1,h2,h3{font-family:"Space Grotesk",sans-serif}
     <section class="page" id="page-opportunities">
       <div class="panel">
         <div class="panel-head"><div><div class="panel-title">Proactive opportunities</div><div class="panel-sub">Company expansion and hiring signals worth pursuing</div></div></div>
-        <div class="table-wrap"><table class="table"><thead><tr><th>Company</th><th>Function</th><th>Score</th><th>Status</th><th>Signal</th><th>Outreach</th><th></th></tr></thead><tbody id="opps-table"></tbody></table></div>
+        <div class="table-wrap"><table class="table"><thead><tr><th>Company</th><th>Function</th><th>Score</th><th>Contact</th><th>Signal</th><th>Why this may matter</th></tr></thead><tbody id="opps-table"></tbody></table></div>
       </div>
     </section>
 
     <section class="page" id="page-cvs">
       <div class="grid-2">
-        <div class="panel"><div class="panel-head"><div><div class="panel-title">CV inventory</div><div class="panel-sub">Files in the Resume Files bucket</div></div></div><div class="pad" id="cv-detail"></div></div>
-        <div class="panel"><div class="panel-head"><div><div class="panel-title">CV rules</div><div class="panel-sub">Current guardrails</div></div></div><div class="pad">
-          <div class="stat-row"><span>Master CV</span><span class="mini-value">Immutable</span></div>
-          <div class="stat-row"><span>Customized CV</span><span class="mini-value">One page</span></div>
-          <div class="stat-row"><span>Renderer validation</span><span class="mini-value">LibreOffice</span></div>
-          <div class="stat-row"><span>Overwrites master</span><span class="mini-value">Never</span></div>
-        </div></div>
+        <div class="panel">
+          <div class="panel-head"><div><div class="panel-title">CV inventory</div><div class="panel-sub">Open or inspect the actual files</div></div></div>
+          <div class="table-wrap">
+            <table class="table">
+              <thead><tr><th>#</th><th>File</th><th>Type</th><th>Created</th><th>Open</th></tr></thead>
+              <tbody id="cv-files-table"></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><div><div class="panel-title">CV rules</div><div class="panel-sub">Current guardrails</div></div></div>
+          <div class="pad">
+            <div class="stat-row"><span>Master CV</span><span class="mini-value">Immutable</span></div>
+            <div class="stat-row"><span>Customized CV</span><span class="mini-value">One page</span></div>
+            <div class="stat-row"><span>Renderer validation</span><span class="mini-value">LibreOffice</span></div>
+            <div class="stat-row"><span>Overwrites master</span><span class="mini-value">Never</span></div>
+            <div style="margin-top:14px;font-size:11px;color:var(--muted)">Customized CVs are generated only for eligible jobs. Use the Jobs page to request a CV for a specific eligible role.</div>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -216,6 +230,11 @@ h1,h2,h3{font-family:"Space Grotesk",sans-serif}
             <div class="config-help">Your Appwrite Application Agent function URL. Used only for prepare/approve actions.</div>
             <input class="config-input" id="application-agent-url" style="width:100%" placeholder="https://…sgp.appwrite.run">
           </div>
+          <div class="config-row">
+            <div class="config-label">Resume Customization Agent URL</div>
+            <div class="config-help">Used to generate a customized CV for a selected eligible job.</div>
+            <input class="config-input" id="resume-agent-url" style="width:100%" placeholder="https://…sgp.appwrite.run">
+          </div>
           <div class="config-actions"><button class="btn" onclick="clearConfig()">Clear</button><button class="btn primary" onclick="saveConfig()">Save & connect</button></div>
           <div class="footer-note">The browser automation itself remains approval-gated and CAPTCHA/login blockers require human intervention.</div>
         </div>
@@ -225,7 +244,7 @@ h1,h2,h3{font-family:"Space Grotesk",sans-serif}
 </div>
 
 <script>
-const CONFIG_KEYS={dashboard:"jc_dashboard_api_url",application:"jc_application_agent_url"};
+const CONFIG_KEYS={dashboard:"jc_dashboard_api_url",application:"jc_application_agent_url",resume:"jc_resume_agent_url"};
 const state={data:null,jobs:[],applications:[],opportunities:[]};
 
 const PAGE_COPY={
@@ -237,10 +256,11 @@ const PAGE_COPY={
   settings:["Settings","Connect this interface to the existing Appwrite functions."]
 };
 
-function getConfig(){return{dashboard:localStorage.getItem(CONFIG_KEYS.dashboard)||"",application:localStorage.getItem(CONFIG_KEYS.application)||""}}
+function getConfig(){return{dashboard:localStorage.getItem(CONFIG_KEYS.dashboard)||"",application:localStorage.getItem(CONFIG_KEYS.application)||"",resume:localStorage.getItem(CONFIG_KEYS.resume)||""}}
 function saveConfig(){
   localStorage.setItem(CONFIG_KEYS.dashboard,document.getElementById("dashboard-api-url").value.trim());
   localStorage.setItem(CONFIG_KEYS.application,document.getElementById("application-agent-url").value.trim());
+  localStorage.setItem(CONFIG_KEYS.resume,document.getElementById("resume-agent-url").value.trim());
   setConnection(false,"Saved. Refreshing…");
   refreshDashboard();
 }
@@ -267,7 +287,7 @@ function responseUrl(url){
 }
 async function apiGet(url){
   if(!url)throw new Error("Dashboard API URL is not configured.");
-  const target=responseUrl(url);
+  const target=responseUrl(url)+(responseUrl(url).includes("?")?"&":"?")+"_ts="+Date.now();
   let r;
   try{
     r=await fetch(target,{method:"GET",cache:"no-store"});
@@ -304,19 +324,47 @@ async function refreshDashboard(){
   const cfg=getConfig();
   document.getElementById("dashboard-api-url").value=cfg.dashboard;
   document.getElementById("application-agent-url").value=cfg.application;
-  if(!cfg.dashboard){setConnection(false,"Dashboard API not connected");renderEmptyState();return}
+  document.getElementById("resume-agent-url").value=cfg.resume;
+
+  const btn=document.getElementById("refresh-btn");
+  if(btn){btn.disabled=true;btn.innerHTML='<i class="ti ti-loader-2"></i> Refreshing…';}
+
+  if(!cfg.dashboard){
+    setConnection(false,"Dashboard API not connected");
+    renderEmptyState();
+    if(btn){btn.disabled=false;btn.innerHTML='<i class="ti ti-refresh"></i> Refresh';}
+    return;
+  }
+
   try{
     setConnection(false,"Refreshing…");
     state.data=await apiGet(cfg.dashboard);
     state.jobs=state.data.all_jobs||state.data.recent_jobs||[];
     state.applications=state.data.applications||[];
     state.opportunities=state.data.opportunities||[];
-    setConnection(true,"Live · "+new Date().toLocaleTimeString());
+    setConnection(true,"Live");
+    const updated=document.getElementById("last-updated");
+    if(updated)updated.textContent="Updated "+new Date().toLocaleTimeString();
+    document.getElementById("alerts").innerHTML="";
     renderAll();
   }catch(e){
-    setConnection(false,"Connection error");
-    showGlobalError(e.message);
-    renderEmptyState();
+    try{
+      await new Promise(resolve=>setTimeout(resolve,600));
+      state.data=await apiGet(cfg.dashboard);
+      state.jobs=state.data.all_jobs||state.data.recent_jobs||[];
+      state.applications=state.data.applications||[];
+      state.opportunities=state.data.opportunities||[];
+      setConnection(true,"Live");
+      const updated=document.getElementById("last-updated");
+      if(updated)updated.textContent="Updated "+new Date().toLocaleTimeString();
+      renderAll();
+    }catch(retryError){
+      setConnection(false,"Connection error");
+      showGlobalError(retryError.message);
+      renderEmptyState();
+    }
+  }finally{
+    if(btn){btn.disabled=false;btn.innerHTML='<i class="ti ti-refresh"></i> Refresh';}
   }
 }
 
@@ -370,24 +418,45 @@ function renderAll(){
   const sourceCounts=state.data.source_counts||{};
   document.getElementById("source-summary").innerHTML=Object.entries(sourceCounts).sort((a,b)=>b[1]-a[1]).map(([source,count])=>'<div class="stat-row"><span>'+esc(source)+'</span><span class="mini-value">'+count+'</span></div>').join("")||'<div class="empty">No source data.</div>';
 
+  const cvFiles=state.data.cv_files||[];
+  document.getElementById("cv-files-table").innerHTML=cvFiles.map((f,index)=>{
+    const kindColor=f.kind==="MASTER"?"purple":f.kind==="PENDING"?"amber":"green";
+    const created=f.created_at?new Date(f.created_at).toLocaleString():"—";
+    const open=f.download_url
+      ? '<a class="btn" href="'+esc(f.download_url)+'" target="_blank" rel="noopener">Open CV</a>'
+      : '<span class="tag amber">Unavailable</span>';
+    return '<tr><td>'+(index+1)+'</td><td><div class="item-title">'+esc(f.file_name)+'</div></td><td>'+tag(f.kind,kindColor)+'</td><td>'+esc(created)+'</td><td>'+open+'</td></tr>';
+  }).join("")||'<tr><td colspan="5"><div class="empty">No CV files found.</div></td></tr>';
   renderJobs();renderApplications();renderOpportunities();
 }
 
 function jobCard(j){
-  return '<div class="item"><div class="item-main"><div class="item-grow"><div class="item-title">'+esc(j.title)+'</div><div class="item-company">'+esc(j.company)+' · '+esc(j.location||j.work_mode||"")+'</div><div class="item-meta">'+scoreTag(j.match_score)+' '+oppTag(j.opportunity_status)+' '+tag(j.work_mode||"","teal")+'</div><div class="item-actions"><button class="btn primary" onclick="approveJob(\''+esc(j.id)+'\')">Approve & open application</button>'+(j.url?'<a class="btn" href="'+esc(j.url)+'" target="_blank" rel="noopener">Open job</a>':"")+'</div></div><div class="score"><div class="score-num">'+Math.round(Number(j.opportunity_score)||0)+'</div><div class="score-label">opp.</div></div></div></div>';
+  const cvButton=j.customized_cv_ready
+    ? '<span class="tag green">CV ready</span>'
+    : '<button class="btn" onclick="prepareCv(\''+esc(j.id)+'\')">Prepare CV</button>';
+  return '<div class="item"><div class="item-main"><div class="item-grow"><div class="item-title">'+esc(j.title)+'</div><div class="item-company">'+esc(j.company)+' · '+esc(j.location||j.work_mode||"")+'</div><div class="item-meta">'+scoreTag(j.match_score)+' '+oppTag(j.opportunity_status)+' '+tag(j.work_mode||"","teal")+'</div><div class="item-actions">'+cvButton+' <button class="btn primary" onclick="approveJob(\''+esc(j.id)+'\')">Approve & open application</button>'+(j.url?'<a class="btn" href="'+esc(j.url)+'" target="_blank" rel="noopener">Open job</a>':"")+'</div></div><div class="score"><div class="score-num">'+Math.round(Number(j.opportunity_score)||0)+'</div><div class="score-label">opp.</div></div></div></div>';
 }
 
 function applicationRow(a){
   const status=String(a.application_status||"").toUpperCase();
-  const button=status==="HUMAN_INTERVENTION_REQUIRED"?' <button class="btn" onclick="openJob(\''+esc(a.url)+'\')">Open site</button>':status==="READY_FOR_FINAL_CONFIRMATION"?' <button class="btn primary" onclick="finalConfirm(\''+esc(a.id)+'\')">Final confirmation</button>':"";
-  return '<div class="item"><div class="item-main"><div class="item-grow"><div class="item-title">'+esc(a.title)+'</div><div class="item-company">'+esc(a.company)+'</div><div class="item-meta">'+appTag(status)+' '+scoreTag(a.match_score)+'</div><div class="item-actions">'+(a.url?'<button class="btn" onclick="openJob(\''+esc(a.url)+'\')">Open job</button>':"")+button+'</div></div></div><div class="footer-note">Job ID: '+esc(a.id)+'</div></div>';
+  let buttons="";
+  if(status==="HUMAN_INTERVENTION_REQUIRED"){
+    buttons='<button class="btn" onclick="openJob(\''+esc(a.url)+'\')">Open site</button> <button class="btn primary" onclick="resumeIntervention(\''+esc(a.id)+'\')">Resume after intervention</button>';
+  }else if(status==="READY_FOR_FINAL_CONFIRMATION"){
+    buttons='<button class="btn primary" onclick="finalConfirm(\''+esc(a.id)+'\')">Final confirmation</button>';
+  }else if(status==="APPROVED_FOR_SUBMISSION"){
+    buttons='<button class="btn" onclick="openJob(\''+esc(a.url)+'\')">Open application page</button>';
+  }else if(status==="BROWSER_RUNNING"){
+    buttons='<button class="btn" onclick="openJob(\''+esc(a.url)+'\')">Open application page</button> <button class="btn danger" onclick="reportIntervention(\''+esc(a.id)+'\')">Report blocker</button>';
+  }
+  return '<div class="item"><div class="item-main"><div class="item-grow"><div class="item-title">'+esc(a.title)+'</div><div class="item-company">'+esc(a.company)+'</div><div class="item-meta">'+appTag(status)+' '+scoreTag(a.match_score)+'</div><div class="item-actions">'+buttons+'</div></div></div><div class="footer-note">Job ID: '+esc(a.id)+'</div></div>';
 }
 
 function renderJobs(){
   const jobs=[...(state.jobs||[]),...(state.data?.ready_to_apply||[])];
   const unique=new Map(jobs.map(x=>[x.id,x]));let arr=[...unique.values()];
   const q=(document.getElementById("job-search")?.value||"").toLowerCase().trim();
-  const f=document.getElementById("job-filter")?.value||"all";
+  const f=document.getElementById("job-filter")?.value||"eligible";
   if(q)arr=arr.filter(j=>String(j.title+" "+j.company).toLowerCase().includes(q));
   if(f==="eligible")arr=arr.filter(j=>String(j.eligibility_status).toLowerCase()==="eligible");
   if(f==="high")arr=arr.filter(j=>String(j.match_status).toLowerCase()==="high_match"||Number(j.match_score)>=80);
@@ -396,7 +465,8 @@ function renderJobs(){
   if(f==="not_applied")arr=arr.filter(j=>String(j.application_status).toUpperCase()==="NOT_APPLIED");
   const sort=document.getElementById("job-sort")?.value||"best";
   if(sort==="newest")arr.sort((a,b)=>String(b.posted_at||"").localeCompare(String(a.posted_at||"")));else arr.sort((a,b)=>(Number(b.match_score)||0)+(Number(b.opportunity_score)||0)-(Number(a.match_score)||0)-(Number(a.opportunity_score)||0));
-  document.getElementById("jobs-table").innerHTML=arr.map(j=>'<tr><td><div class="item-title">'+esc(j.title)+'</div><div class="item-company">'+esc(j.company)+'</div><div class="item-meta">'+tag(j.work_mode||"","teal")+' '+tag(j.source||"","blue")+'</div></td><td>'+scoreTag(j.match_score)+'</td><td>'+oppTag(j.opportunity_status)+'<div style="margin-top:4px;font-weight:700">'+Math.round(Number(j.opportunity_score)||0)+'</div></td><td>'+tag(j.eligibility_status||"UNKNOWN",String(j.eligibility_status).toLowerCase()==="eligible"?"green":"amber")+'</td><td>'+appTag(j.application_status||"NOT_APPLIED")+'</td><td>'+tag(j.customized_cv_ready?"READY":"NOT READY",j.customized_cv_ready?"green":"amber")+'</td><td>'+(j.url?'<a class="link" href="'+esc(j.url)+'" target="_blank" rel="noopener">Open</a>':"")+'</td></tr>').join("")||'<tr><td colspan="7"><div class="empty">No jobs match your filters.</div></td></tr>';
+  document.getElementById("job-count").textContent="Showing "+arr.length+" opportunities";
+  document.getElementById("jobs-table").innerHTML=arr.map((j,index)=>'<tr><td>'+(index+1)+'</td><td><div class="item-title">'+esc(j.title)+'</div><div class="item-company">'+esc(j.company)+'</div><div class="item-meta">'+tag(j.work_mode||"","teal")+' '+tag(j.source||"","blue")+'</div></td><td>'+scoreTag(j.match_score)+'</td><td>'+oppTag(j.opportunity_status)+'<div style="margin-top:4px;font-weight:700">'+Math.round(Number(j.opportunity_score)||0)+'</div></td><td>'+tag(j.eligibility_status||"UNKNOWN",String(j.eligibility_status).toLowerCase()==="eligible"?"green":"amber")+'</td><td>'+appTag(j.application_status||"NOT_APPLIED")+'</td><td>'+tag(j.customized_cv_ready?"READY":"NOT READY",j.customized_cv_ready?"green":"amber")+'</td><td>(j.customized_cv_ready?'<button class="btn" onclick="approveJob(\\''+esc(j.id)+'\\')">Apply</button>':'<button class="btn" onclick="prepareCv(\\''+esc(j.id)+'\\')">Prepare CV</button>')</td></tr>').join("")||'<tr><td colspan="8"><div class="empty">No jobs match your filters.</div></td></tr>';
 }
 
 function renderApplications(){
@@ -409,7 +479,50 @@ function renderApplications(){
 
 function renderOpportunities(){
   const arr=state.opportunities||[];
-  document.getElementById("opps-table").innerHTML=arr.map(o=>'<tr><td><div class="item-title">'+esc(o.company)+'</div></td><td>'+esc(o.likely_function||"—")+'</td><td><strong>'+Math.round(Number(o.score)||0)+'</strong></td><td>'+oppTag(o.status)+'</td><td>'+esc(o.signal_type||"—")+'</td><td>'+esc(o.outreach_angle||"—")+'</td><td>'+tag(o.outreach_status||"NOT_CONTACTED","blue")+'</td></tr>').join("")||'<tr><td colspan="7"><div class="empty">No proactive opportunities returned.</div></td></tr>';
+  document.getElementById("opps-table").innerHTML=arr.map(o=>{
+    const contact=o.contact_found
+      ? (esc(o.contact_name)+(o.contact_title?' · '+esc(o.contact_title):""))
+      : '<span style="color:var(--muted)">No contact found yet</span>';
+    const profile=o.contact_url
+      ? ' <a class="link" href="'+esc(o.contact_url)+'" target="_blank" rel="noopener">Profile</a>'
+      : "";
+    return '<tr><td><div class="item-title">'+esc(o.company)+'</div></td><td>'+esc(o.likely_function||"—")+'</td><td><strong>'+Math.round(Number(o.score)||0)+'</strong></td><td>'+contact+profile+'</td><td>'+esc(o.signal_type||"—")+'</td><td style="max-width:360px">'+esc(o.outreach_angle||"—")+'</td></tr>';
+  }).join("")||'<tr><td colspan="6"><div class="empty">No proactive opportunities returned.</div></td></tr>';
+}
+
+async function prepareCv(jobId){
+  const cfg=getConfig();
+  if(!cfg.resume){
+    showPage("settings");
+    alert("Add the Resume Customization Agent URL in Settings first.");
+    return;
+  }
+  if(!jobId)return;
+  try{
+    const result=await apiPost(cfg.resume,{jobId});
+    alert("Resume Agent: "+(result.status||"DONE")+(result.company? "\n"+result.company+" — "+result.job_title:""));
+    await refreshDashboard();
+  }catch(e){alert(e.message)}
+}
+
+async function reportIntervention(jobId){
+  const cfg=getConfig();
+  try{
+    const reason=prompt("What blocked the browser?","CAPTCHA / Cloudflare / login / OTP");
+    if(reason===null)return;
+    const result=await apiPost(cfg.application,{action:"intervention",jobId,reason});
+    alert("Status: "+result.status);
+    await refreshDashboard();
+  }catch(e){alert(e.message)}
+}
+
+async function resumeIntervention(jobId){
+  const cfg=getConfig();
+  try{
+    const result=await apiPost(cfg.application,{action:"resume_after_intervention",jobId});
+    alert("Status: "+result.status);
+    await refreshDashboard();
+  }catch(e){alert(e.message)}
 }
 
 async function prepareNext(){
@@ -417,7 +530,7 @@ async function prepareNext(){
   if(!cfg.application){showPage("settings");return}
   try{
     const result=await apiPost(cfg.application,{});
-    if(result.status==="READY_FOR_APPROVAL")alert("Application ready: "+result.company+" — "+result.job_title);
+    if(result.status==="READY_FOR_APPROVAL")alert("Next application ready: "+result.company+" — "+result.job_title);
     else if(result.status==="CUSTOMIZED_CV_NOT_READY")alert("The best eligible job does not have a final CV yet. Resume customization needs to finish first.");
     else alert("Application Agent: "+result.status);
     await refreshDashboard();
