@@ -1,4 +1,4 @@
-import { Client, TablesDB, Query, Storage } from "node-appwrite";
+import { Client, TablesDB, Query, Storage, Tokens } from "node-appwrite";
 
 const APPWRITE_ENDPOINT =
   process.env.APPWRITE_ENDPOINT ||
@@ -167,7 +167,8 @@ function createClients() {
 
   return {
     tablesDB: new TablesDB(client),
-    storage: new Storage(client)
+    storage: new Storage(client),
+    tokens: new Tokens(client)
   };
 }
 
@@ -411,17 +412,53 @@ async function prepareApplication(tablesDB, storage, request) {
   );
 }
 
-async function launchTinyFishApplication(job, cvFile) {
+async function launchTinyFishApplication(job, cvFile, tokens) {
   requireEnv(
     "TINYFISH_API_KEY",
     TINYFISH_API_KEY
   );
+
+  const expires =
+    new Date(
+      Date.now() + 30 * 60 * 1000
+    ).toISOString();
+
+  const fileToken =
+    await tokens.createFileToken({
+      bucketId:
+        RESUME_BUCKET_ID,
+      fileId:
+        cvFile.$id,
+      expire:
+        expires
+    });
+
+  const cvDownloadUrl =
+    APPWRITE_ENDPOINT +
+    "/storage/buckets/" +
+    encodeURIComponent(
+      RESUME_BUCKET_ID
+    ) +
+    "/files/" +
+    encodeURIComponent(
+      cvFile.$id
+    ) +
+    "/download?project=" +
+    encodeURIComponent(
+      APPWRITE_PROJECT_ID
+    ) +
+    "&token=" +
+    encodeURIComponent(
+      fileToken.secret
+    );
 
   const payload = {
     url: jobUrl(job),
     goal:
       "JOB_ID=" +
       job.$id +
+      " CV_TOKEN_ID=" +
+      fileToken.$id +
       " Complete the job application workflow for " +
       companyName(job) +
       " — " +
@@ -541,7 +578,8 @@ async function approveApplication(tablesDB, storage, request) {
     browserRun =
       await launchTinyFishApplication(
         updated,
-        cvFile
+        cvFile,
+        tokens
       );
   } catch (launchError) {
     await updateApplicationStatus(
@@ -782,7 +820,7 @@ export default async ({ req, res, error }) => {
         ""
       );
 
-    const { tablesDB, storage } =
+    const { tablesDB, storage, tokens } =
       createClients();
 
     if (
