@@ -260,19 +260,42 @@ function appTag(status){
 }
 function oppTag(status){const s=String(status||"");return tag(s.replaceAll("_"," "),s.toUpperCase()==="PRIORITY"?"purple":"blue")}
 
+function responseUrl(url){
+  const value=String(url||"").trim();
+  if(!value)return "";
+  return value + (value.includes("?") ? "&" : "?") + "type=json";
+}
 async function apiGet(url){
   if(!url)throw new Error("Dashboard API URL is not configured.");
-  const r=await fetch(url,{cache:"no-store"});
+  const target=responseUrl(url);
+  let r;
+  try{
+    r=await fetch(target,{method:"GET",cache:"no-store"});
+  }catch(e){
+    throw new Error("Failed to reach Dashboard API. Check the Appwrite function permissions and Web platform.");
+  }
   const text=await r.text();
-  let data={};try{data=JSON.parse(text)}catch{throw new Error("Dashboard API returned non-JSON data.")}
+  let data={};
+  try{data=JSON.parse(text)}catch{
+    throw new Error("Dashboard API returned non-JSON data (HTTP "+r.status+").");
+  }
   if(!r.ok||data.status==="FAILED")throw new Error(data.error||("HTTP "+r.status));
   return data;
 }
 async function apiPost(url,body){
   if(!url)throw new Error("Application Agent URL is not configured.");
-  const r=await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+  const target=responseUrl(url);
+  let r;
+  try{
+    r=await fetch(target,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+  }catch(e){
+    throw new Error("Failed to reach Application Agent. Check the Appwrite function permissions and Web platform.");
+  }
   const text=await r.text();
-  let data={};try{data=JSON.parse(text)}catch{throw new Error("Application Agent returned non-JSON data.")}
+  let data={};
+  try{data=JSON.parse(text)}catch{
+    throw new Error("Application Agent returned non-JSON data (HTTP "+r.status+").");
+  }
   if(!r.ok||data.status==="FAILED")throw new Error(data.error||("HTTP "+r.status));
   return data;
 }
