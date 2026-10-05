@@ -26,15 +26,6 @@ const RESUME_BUCKET_ID =
 
 const FINAL_CV_PREFIX = "CUSTOMIZED-";
 
-const TINYFISH_API_KEY =
-  process.env.TINYFISH_API_KEY;
-
-const TINYFISH_RUN_URL =
-  "https://agent.tinyfish.ai/v1/automation/run-async";
-
-const TINYFISH_WEBHOOK_URL =
-  process.env.TINYFISH_WEBHOOK_URL ||
-  "https://placement-command-center-onq5.sgp.appwrite.run";
 
 const TERMINAL_APPLICATION_STATUSES = new Set([
   "APPLIED",
@@ -46,8 +37,8 @@ const TERMINAL_APPLICATION_STATUSES = new Set([
 const HUMAN_INTERVENTION_STATUS =
   "HUMAN_INTERVENTION_REQUIRED";
 
-const BROWSER_RUNNING_STATUS =
-  "BROWSER_RUNNING";
+const READY_FOR_BROWSER_STATUS =
+  "READY_FOR_BROWSER";
 
 function requireEnv(name, value) {
   if (!value) {
@@ -412,112 +403,7 @@ async function prepareApplication(tablesDB, storage, request) {
   );
 }
 
-async function launchTinyFishApplication(job, cvFile, tokens) {
-  requireEnv(
-    "TINYFISH_API_KEY",
-    TINYFISH_API_KEY
-  );
-
-  const expires =
-    new Date(
-      Date.now() + 30 * 60 * 1000
-    ).toISOString();
-
-  const fileToken =
-    await tokens.createFileToken({
-      bucketId:
-        RESUME_BUCKET_ID,
-      fileId:
-        cvFile.$id,
-      expire:
-        expires
-    });
-
-  const cvDownloadUrl =
-    APPWRITE_ENDPOINT +
-    "/storage/buckets/" +
-    encodeURIComponent(
-      RESUME_BUCKET_ID
-    ) +
-    "/files/" +
-    encodeURIComponent(
-      cvFile.$id
-    ) +
-    "/download?project=" +
-    encodeURIComponent(
-      APPWRITE_PROJECT_ID
-    ) +
-    "&token=" +
-    encodeURIComponent(
-      fileToken.secret
-    );
-
-  const payload = {
-    url: jobUrl(job),
-    goal:
-      "JOB_ID=" +
-      job.$id +
-      " CV_TOKEN_ID=" +
-      fileToken.$id +
-      " Complete the job application workflow for " +
-      companyName(job) +
-      " — " +
-      jobTitle(job) +
-      ". Use only verified candidate information available in the application context. Upload the customized CV file named " +
-      cvFile.name +
-      " when the form asks for a resume. Fill all ordinary non-final application fields you can complete safely. STOP before any final Submit, Send, Apply, or equivalent final-submission control. NEVER submit the application. If a CAPTCHA, Cloudflare/Turnstile, reCAPTCHA, hCaptcha, human-verification step, login/sign-in requirement, OTP, phone/email verification, or any other security gate blocks progress, STOP immediately and report that HUMAN_INTERVENTION_REQUIRED. Do not bypass security challenges.",
-    webhook_url:
-      TINYFISH_WEBHOOK_URL,
-    browser_profile:
-      "stealth"
-  };
-
-  const response =
-    await fetch(
-      TINYFISH_RUN_URL,
-      {
-        method: "POST",
-        headers: {
-          "X-API-Key":
-            TINYFISH_API_KEY,
-          "Content-Type":
-            "application/json"
-        },
-        body:
-          JSON.stringify(payload)
-      }
-    );
-
-  const text =
-    await response.text();
-
-  let data;
-
-  try {
-    data = JSON.parse(text);
-  } catch {
-    data = {
-      raw: text
-    };
-  }
-
-  if (!response.ok) {
-    throw new Error(
-      "TINYFISH_RUN_FAILED_" +
-      response.status +
-      ": " +
-      normalize(
-        data?.error?.message ||
-        data?.message ||
-        text
-      )
-    );
-  }
-
-  return data;
-}
-
-async function approveApplication(tablesDB, storage, tokens, request) {
+async function approveApplication(tablesDB, storage, request) {
   const jobId = normalize(request.jobId);
 
   if (!jobId) {
@@ -543,7 +429,8 @@ async function approveApplication(tablesDB, storage, tokens, request) {
     };
   }
 
-  const currentStatus = applicationStatus(job);
+  const currentStatus =
+    applicationStatus(job);
 
   if (
     currentStatus !== "NOT_APPLIED" &&
@@ -556,8 +443,14 @@ async function approveApplication(tablesDB, storage, tokens, request) {
     };
   }
 
-  const files = await listResumeFiles(storage);
-  const cvFile = findCustomizedCv(files, job);
+  const files =
+    await listResumeFiles(storage);
+
+  const cvFile =
+    findCustomizedCv(
+      files,
+      job
+    );
 
   if (!cvFile) {
     return {
@@ -566,78 +459,66 @@ async function approveApplication(tablesDB, storage, tokens, request) {
     };
   }
 
-  const updated = await updateApplicationStatus(
-    tablesDB,
-    jobId,
-    BROWSER_RUNNING_STATUS
-  );
-
-  let browserRun;
-
-  try {
-    browserRun =
-      await launchTinyFishApplication(
-        updated,
-        cvFile,
-        tokens
-      );
-  } catch (launchError) {
+  const updated =
     await updateApplicationStatus(
       tablesDB,
       jobId,
-      "BROWSER_LAUNCH_FAILED"
+      "APPROVED_FOR_SUBMISSION"
     );
 
-    return {
-      status:
-        "BROWSER_LAUNCH_FAILED",
-      job_id:
-        jobId,
-      company:
-        companyName(job),
-      job_title:
-        jobTitle(job),
-      job_url:
-        jobUrl(job),
-      error:
-        launchError?.message ||
-        String(launchError)
-    };
-  }
-
   return {
-    status: BROWSER_RUNNING_STATUS,
-    job_id: updated.$id,
-    company: companyName(updated),
-    job_title: jobTitle(updated),
-    job_url: jobUrl(updated),
+    status:
+      READY_FOR_BROWSER_STATUS,
+
+    job_id:
+      updated.$id,
+
+    company:
+      companyName(updated),
+
+    job_title:
+      jobTitle(updated),
+
+    job_url:
+      jobUrl(updated),
+
     application_status:
       applicationStatus(updated),
+
     customized_cv: {
-      file_id: cvFile.$id,
-      file_name: cvFile.name
+      file_id:
+        cvFile.$id,
+      file_name:
+        cvFile.name
     },
+
     browser_task: {
-      action: "OPEN_AND_COMPLETE_APPLICATION",
-      job_id: updated.$id,
-      run_id:
-        browserRun?.run_id ||
-        browserRun?.id ||
-        null,
-      status:
-        browserRun?.status ||
-        "PENDING",
-      url: jobUrl(updated),
-      upload_cv_file_id: cvFile.$id,
-      upload_cv_file_name: cvFile.name,
-      stop_before_final_submit: true,
-      report_security_or_login_blockers: true
+      action:
+        "OPEN_AND_COMPLETE_APPLICATION",
+
+      job_id:
+        updated.$id,
+
+      url:
+        jobUrl(updated),
+
+      upload_cv_file_id:
+        cvFile.$id,
+
+      upload_cv_file_name:
+        cvFile.name,
+
+      stop_before_final_submit:
+        true,
+
+      report_security_or_login_blockers:
+        true
     },
+
     browser_goal:
       "JOB_ID=" +
       updated.$id +
-      " Open the application URL, complete all non-final application steps using only verified candidate information, upload the specified customized CV, and STOP before any final Submit/Send button. If a CAPTCHA, Cloudflare/Turnstile, human verification, login, phone/email verification, OTP, or other security gate blocks progress, stop and report HUMAN_INTERVENTION_REQUIRED. Never bypass a security challenge and never submit the application."
-
+      " Open the application URL, complete all ordinary non-final application steps using only verified candidate information, upload the specified customized CV, and STOP before any final Submit, Send, Apply, or equivalent final-submission control. If a CAPTCHA, Cloudflare/Turnstile, reCAPTCHA, hCaptcha, human-verification step, login/sign-in requirement, OTP, phone/email verification, or any other security gate blocks progress, STOP immediately and report HUMAN_INTERVENTION_REQUIRED. Never bypass a security challenge and never submit the application."
   };
 }
 
@@ -820,7 +701,7 @@ export default async ({ req, res, error }) => {
         ""
       );
 
-    const { tablesDB, storage, tokens } =
+    const { tablesDB, storage } =
       createClients();
 
     if (
@@ -831,7 +712,6 @@ export default async ({ req, res, error }) => {
         await approveApplication(
           tablesDB,
           storage,
-          tokens,
           request
         )
       );
