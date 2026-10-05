@@ -143,8 +143,8 @@ jobs:
 
           status=$(jq -r '.status // "FAILED"' render-result.json)
 
-          if [ "${status}" = "VALIDATED" ] && [ "${PAGES}" -eq 1 ]; then
-            echo "PASS: rendered CV is exactly 1 page."
+          if { [ "${status}" = "VALIDATED" ] || [ "${status}" = "ALREADY_VALIDATED" ] || [ "${status}" = "ALREADY_PROCESSED" ]; } && [ "${PAGES}" -eq 1 ]; then
+            echo "PASS: rendered CV is exactly 1 page (or was already finalized by an earlier retry)."
             exit 0
           fi
 
