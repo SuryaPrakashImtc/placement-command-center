@@ -80,7 +80,7 @@ export default async ({ req, res, log, error }) => {
       const values = [];
 
       for (const match of text.matchAll(
-        /(d+(?:\.\d+)?)\s*(?:-|to)\s*(d+(?:\.\d+)?)\s*years?/g
+        /(\d+(?:\.\d+)?)\s*(?:-|to)\s*(d+(?:\.\d+)?)\s*years?/g
       )) {
         values.push(Number(match[1]));
       }
