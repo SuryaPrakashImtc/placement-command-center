@@ -1682,8 +1682,93 @@ function getMatchScore(
   return 0;
 }
 
+function jobOutputFingerprint(
+  job
+) {
+  const company =
+    normalize(
+      job.company ??
+      job.company_name ??
+      ""
+    )
+      .replace(
+        /[^a-zA-Z0-9-_ ]/g,
+        ""
+      )
+      .replace(
+        /\s+/g,
+        "-"
+      )
+      .slice(
+        0,
+        80
+      );
+
+  const title =
+    normalize(
+      job.title ??
+      job.job_title ??
+      ""
+    )
+      .replace(
+        /[^a-zA-Z0-9-_ ]/g,
+        ""
+      )
+      .replace(
+        /\s+/g,
+        "-"
+      )
+      .slice(
+        0,
+        80
+      );
+
+  return (
+    `${company}-${title}`
+  )
+    .toLowerCase();
+}
+
+function isJobAlreadyCustomized(
+  job,
+  files
+) {
+  const fingerprint =
+    jobOutputFingerprint(
+      job
+    );
+
+  if (!fingerprint) {
+    return false;
+  }
+
+  return files.some(
+    (file) => {
+      const name =
+        normalize(
+          file.name
+        ).toLowerCase();
+
+      return (
+        (
+          name.startsWith(
+            "pending-customized-"
+          ) ||
+          name.startsWith(
+            "customized-"
+          )
+        ) &&
+        name.includes(
+          fingerprint
+        )
+      );
+    }
+  );
+}
+
 function selectBestJob(
-  jobs
+  jobs,
+  files = []
 ) {
   const eligible =
     jobs.filter(
@@ -1692,6 +1777,15 @@ function selectBestJob(
           job.eligibility_status ??
           job.eligibilityStatus ??
           job.eligible;
+
+        if (
+          isJobAlreadyCustomized(
+            job,
+            files
+          )
+        ) {
+          return false;
+        }
 
         /*
          * If eligibility isn't available,
@@ -2187,16 +2281,17 @@ async function customizeResume(req) {
   } else {
     job =
       selectBestJob(
-        jobs
+        jobs,
+        await listStorageFiles()
       );
   }
 
   if (!job) {
     return {
       status:
-        "FAILED",
-      error:
-        "NO_ELIGIBLE_JOB_FOUND"
+        "NO_NEW_JOB_TO_CUSTOMIZE",
+      message:
+        "No eligible job currently requires a new customized CV."
     };
   }
 
