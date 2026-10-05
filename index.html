@@ -245,6 +245,11 @@ h1,h2,h3{font-family:"Space Grotesk",sans-serif}
 
 <script>
 const CONFIG_KEYS={dashboard:"jc_dashboard_api_url",application:"jc_application_agent_url",resume:"jc_resume_agent_url"};
+const DEFAULT_CONFIG={
+  dashboard:"https://placement-command-center-5sy9.sgp.appwrite.run",
+  application:"https://placement-command-center-341r.sgp.appwrite.run",
+  resume:"https://placement-command-center-ixkc.sgp.appwrite.run"
+};
 const state={data:null,jobs:[],applications:[],opportunities:[]};
 
 const PAGE_COPY={
@@ -256,7 +261,7 @@ const PAGE_COPY={
   settings:["Settings","Connect this interface to the existing Appwrite functions."]
 };
 
-function getConfig(){return{dashboard:localStorage.getItem(CONFIG_KEYS.dashboard)||"",application:localStorage.getItem(CONFIG_KEYS.application)||"",resume:localStorage.getItem(CONFIG_KEYS.resume)||""}}
+function getConfig(){return{dashboard:localStorage.getItem(CONFIG_KEYS.dashboard)||DEFAULT_CONFIG.dashboard,application:localStorage.getItem(CONFIG_KEYS.application)||DEFAULT_CONFIG.application,resume:localStorage.getItem(CONFIG_KEYS.resume)||DEFAULT_CONFIG.resume}}
 function saveConfig(){
   localStorage.setItem(CONFIG_KEYS.dashboard,document.getElementById("dashboard-api-url").value.trim());
   localStorage.setItem(CONFIG_KEYS.application,document.getElementById("application-agent-url").value.trim());
@@ -370,9 +375,9 @@ async function refreshDashboard(){
 
 function renderEmptyState(){
   const msg="Connect the dashboard-api function in Settings to load live data.";
-  ["top-ready","attention-list","recent-mini","source-summary","system-status","cv-summary","cv-detail","applications-list"].forEach(id=>{const el=document.getElementById(id);if(el)el.innerHTML='<div class="empty">'+msg+"</div>"});
-  document.getElementById("jobs-table").innerHTML='<tr><td colspan="7"><div class="empty">'+msg+"</div></td></tr>";
-  document.getElementById("opps-table").innerHTML='<tr><td colspan="7"><div class="empty">'+msg+"</div></td></tr>";
+  ["top-ready","attention-list","source-summary","system-status","cv-summary","cv-detail","applications-list"].forEach(id=>{const el=document.getElementById(id);if(el)el.innerHTML='<div class="empty">'+msg+"</div>"});
+  document.getElementById("jobs-table").innerHTML='<tr><td colspan="8"><div class="empty">'+msg+"</div></td></tr>";
+  document.getElementById("opps-table").innerHTML='<tr><td colspan="6"><div class="empty">'+msg+"</div></td></tr>";
 }
 
 function showGlobalError(msg){
@@ -466,7 +471,13 @@ function renderJobs(){
   const sort=document.getElementById("job-sort")?.value||"best";
   if(sort==="newest")arr.sort((a,b)=>String(b.posted_at||"").localeCompare(String(a.posted_at||"")));else arr.sort((a,b)=>(Number(b.match_score)||0)+(Number(b.opportunity_score)||0)-(Number(a.match_score)||0)-(Number(a.opportunity_score)||0));
   document.getElementById("job-count").textContent="Showing "+arr.length+" opportunities";
-  document.getElementById("jobs-table").innerHTML=arr.map((j,index)=>'<tr><td>'+(index+1)+'</td><td><div class="item-title">'+esc(j.title)+'</div><div class="item-company">'+esc(j.company)+'</div><div class="item-meta">'+tag(j.work_mode||"","teal")+' '+tag(j.source||"","blue")+'</div></td><td>'+scoreTag(j.match_score)+'</td><td>'+oppTag(j.opportunity_status)+'<div style="margin-top:4px;font-weight:700">'+Math.round(Number(j.opportunity_score)||0)+'</div></td><td>'+tag(j.eligibility_status||"UNKNOWN",String(j.eligibility_status).toLowerCase()==="eligible"?"green":"amber")+'</td><td>'+appTag(j.application_status||"NOT_APPLIED")+'</td><td>'+tag(j.customized_cv_ready?"READY":"NOT READY",j.customized_cv_ready?"green":"amber")+'</td><td>(j.customized_cv_ready?'<button class="btn" onclick="approveJob(\\''+esc(j.id)+'\\')">Apply</button>':'<button class="btn" onclick="prepareCv(\\''+esc(j.id)+'\\')">Prepare CV</button>')</td></tr>').join("")||'<tr><td colspan="8"><div class="empty">No jobs match your filters.</div></td></tr>';
+  document.getElementById("job-count").textContent="Showing "+arr.length+" opportunities";
+  document.getElementById("jobs-table").innerHTML=arr.map((j,index)=>{
+    const action = j.customized_cv_ready
+      ? '<button class="btn" onclick="approveJob(\\''+esc(j.id)+'\\')">Apply</button>'
+      : '<button class="btn" onclick="prepareCv(\\''+esc(j.id)+'\\')">Prepare CV</button>';
+    return '<tr><td>'+(index+1)+'</td><td><div class="item-title">'+esc(j.title)+'</div><div class="item-company">'+esc(j.company)+'</div><div class="item-meta">'+tag(j.work_mode||"","teal")+' '+tag(j.source||"","blue")+'</div></td><td>'+scoreTag(j.match_score)+'</td><td>'+oppTag(j.opportunity_status)+'<div style="margin-top:4px;font-weight:700">'+Math.round(Number(j.opportunity_score)||0)+'</div></td><td>'+tag(j.eligibility_status||"UNKNOWN",String(j.eligibility_status).toLowerCase()==="eligible"?"green":"amber")+'</td><td>'+appTag(j.application_status||"NOT_APPLIED")+'</td><td>'+tag(j.customized_cv_ready?"READY":"NOT READY",j.customized_cv_ready?"green":"amber")+'</td><td>'+action+'</td></tr>';
+  }).join("")||'<tr><td colspan="8"><div class="empty">No jobs match your filters.</div></td></tr>';
 }
 
 function renderApplications(){
