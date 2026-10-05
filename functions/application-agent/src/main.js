@@ -47,7 +47,7 @@ function requireEnv(name, value) {
 }
 
 const DASHBOARD_ORIGIN =
-  "https://suryaprakashimtc.github.io";
+  "*";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin":
