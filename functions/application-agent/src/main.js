@@ -46,6 +46,28 @@ function requireEnv(name, value) {
   }
 }
 
+const DASHBOARD_ORIGIN =
+  "https://suryaprakashmtc.github.io";
+
+const CORS_HEADERS = {
+  "Access-Control-Allow-Origin":
+    DASHBOARD_ORIGIN,
+  "Access-Control-Allow-Methods":
+    "GET, POST, OPTIONS",
+  "Access-Control-Allow-Headers":
+    "Content-Type, Authorization",
+  "Vary":
+    "Origin"
+};
+
+function respond(res, data, status = 200) {
+  return res.json(
+    data,
+    status,
+    CORS_HEADERS
+  );
+}
+
 function normalize(value) {
   return String(value ?? "")
     .replace(/\s+/g, " ")
@@ -668,6 +690,10 @@ async function recordSubmission(tablesDB, request) {
 
 export default async ({ req, res, error }) => {
   try {
+    if (String(req?.method || "").toUpperCase() === "OPTIONS") {
+      return res.text("", 204, CORS_HEADERS);
+    }
+
     requireEnv(
       "JOB_AUTOMATION_API_KEY",
       APPWRITE_API_KEY
@@ -766,7 +792,7 @@ export default async ({ req, res, error }) => {
   } catch (err) {
     error?.(err?.stack || err?.message || String(err));
 
-    return res.json(
+    return respond(res,
       {
         status: "FAILED",
         error: err?.message || String(err)
