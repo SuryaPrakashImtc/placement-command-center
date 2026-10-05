@@ -661,9 +661,15 @@ async function recordSubmission(tablesDB, request) {
     jobId
   );
 
+  const allowedSubmissionStates = new Set([
+    "APPROVED_FOR_SUBMISSION",
+    "READY_FOR_FINAL_CONFIRMATION"
+  ]);
+
   if (
-    applicationStatus(job) !==
-    "APPROVED_FOR_SUBMISSION"
+    !allowedSubmissionStates.has(
+      applicationStatus(job)
+    )
   ) {
     return {
       status: "SUBMISSION_BLOCKED",
