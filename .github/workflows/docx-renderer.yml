@@ -103,8 +103,43 @@ jobs:
 
       - name: Render DOCX to PDF
         if: steps.source.outputs.available == 'true'
+        env:
+          OIDC_TOKEN: ${{ steps.oidc.outputs.token }}
+          APPWRITE_FUNCTION_URL: https://placement-command-center-ixkc.sgp.appwrite.run/render-result
+          FILE_ID: ${{ steps.source.outputs.file_id }}
         run: |
-          libreoffice --headless --convert-to pdf --outdir rendered input/resume.docx
+          set -euo pipefail
+
+          if ! libreoffice --headless --convert-to pdf --outdir rendered input/resume.docx; then
+            echo "LibreOffice could not open the DOCX. Quarantining this file so the same broken file is not retried."
+            payload=$(jq -n --arg fileId "${FILE_ID}" '{fileId: $fileId, pages: 0}')
+
+            http_status=$(curl --silent --show-error --location \
+              -w "%{http_code}" \
+              -X POST \
+              -H "Authorization: Bearer ${OIDC_TOKEN}" \
+              -H "Content-Type: application/json" \
+              --data "${payload}" \
+              "${APPWRITE_FUNCTION_URL}" \
+              -o render-result.json)
+
+            echo "Appwrite render-result HTTP status: ${http_status}"
+            cat render-result.json | jq .
+
+            if [ "${http_status}" -ge 400 ]; then
+              exit 1
+            fi
+
+            status=$(jq -r '.status // "FAILED"' render-result.json)
+
+            if [ "${status}" != "RENDER_REJECTED" ] && [ "${status}" != "ALREADY_REJECTED" ]; then
+              exit 1
+            fi
+
+            echo "Broken DOCX quarantined; no repeated failure will be generated."
+            exit 0
+          fi
+
           test -s rendered/resume.pdf
 
       - name: Count rendered pages
