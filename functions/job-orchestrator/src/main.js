@@ -67,12 +67,12 @@ export default async ({ req, res, log, error }) => {
     for (const category of remotiveCategories) {
       try {
         const response = await fetch(
-          \`https://remotive.com/api/remote-jobs?category=\${category}&limit=10\`
+          `https://remotive.com/api/remote-jobs?category=${category}&limit=10`
         );
 
         if (!response.ok) {
           throw new Error(
-            \`Remotive API returned \${response.status} for \${category}\`
+            `Remotive API returned ${response.status} for ${category}`
           );
         }
 
@@ -87,7 +87,7 @@ export default async ({ req, res, log, error }) => {
 
         for (const job of sourceJobs) {
           const sourceJobId =
-            \`REMOTIVE_\${String(job.id)}\`;
+            `REMOTIVE_${String(job.id)}`;
 
           if (jobExists(sourceJobId)) {
             remotiveSkipped++;
@@ -184,7 +184,7 @@ export default async ({ req, res, log, error }) => {
           'PARTIAL_SUCCESS';
 
         error(
-          \`Remotive \${category}: \${remotiveError.message}\`
+          `Remotive ${category}: ${remotiveError.message}`
         );
       }
     }
@@ -237,7 +237,7 @@ export default async ({ req, res, log, error }) => {
 
         if (!response.ok) {
           throw new Error(
-            \`Himalayas API returned \${response.status} for \${searchTerm}\`
+            `Himalayas API returned ${response.status} for ${searchTerm}`
           );
         }
 
@@ -281,7 +281,7 @@ export default async ({ req, res, log, error }) => {
           himalayasUnique++;
 
           const sourceJobId =
-            \`HIMALAYAS_\${guid}\`;
+            `HIMALAYAS_${guid}`;
 
           if (
             jobExists(
@@ -341,13 +341,13 @@ export default async ({ req, res, log, error }) => {
                 : null;
 
             salary =
-              \`\${job.currency || ''} \${min}\` +
+              `${job.currency || ''} ${min}` +
               (
                 max
-                  ? \` - \${max}\`
+                  ? ` - ${max}`
                   : ''
               ) +
-              \` \${job.salaryPeriod || 'annual'}\`;
+              ` ${job.salaryPeriod || 'annual'}`;
           }
 
           let postedDate = null;
@@ -481,7 +481,7 @@ export default async ({ req, res, log, error }) => {
           'PARTIAL_SUCCESS';
 
         error(
-          \`Himalayas \${searchTerm}: \${himalayasError.message}\`
+          `Himalayas ${searchTerm}: ${himalayasError.message}`
         );
       }
     }
