@@ -2564,54 +2564,87 @@ async function customizeResume(req) {
 
   let job = null;
 
-  if (
-    requestBody.jobId
-  ) {
-    const tables =
-      createTablesClient();
-
-    job =
-      await tables.getRow(
-        DATABASE_ID,
-        JOBS_TABLE_ID,
-        String(
-          requestBody.jobId
-        )
-      );
-
-    const eligibility =
-      job.eligibility_status ??
-      job.eligibilityStatus ??
-      job.eligible;
-
-    if (
-      String(
-        eligibility ??
-        ""
-      ).toUpperCase() ===
-      "NOT_ELIGIBLE"
-    ) {
-      return {
-        status:
-          "FAILED",
-        error:
-          "JOB_NOT_ELIGIBLE"
-      };
-    }
-  } else {
-    job =
-      selectBestJob(
-        jobs,
-        storageFiles
-      );
-  }
-
-  if (!job) {
+  /*
+   * CV customization is now USER-INITIATED ONLY.
+   *
+   * The scheduler can still invoke this function safely, but
+   * no Gemini call is allowed unless the dashboard explicitly
+   * supplies the jobId the user selected.
+   */
+  if (!requestBody.jobId) {
     return {
       status:
-        "NO_NEW_JOB_TO_CUSTOMIZE",
+        "WAITING_FOR_USER_APPROVAL",
       message:
-        "No eligible job currently requires a new customized CV."
+        "No CV was generated. Select a job in the command center and explicitly approve it for CV preparation."
+    };
+  }
+
+  const tables =
+    createTablesClient();
+
+  job =
+    await tables.getRow(
+      DATABASE_ID,
+      JOBS_TABLE_ID,
+      String(
+        requestBody.jobId
+      )
+    );
+
+  const eligibility =
+    job.eligibility_status ??
+    job.eligibilityStatus ??
+    job.eligible;
+
+  if (
+    String(
+      eligibility ??
+      ""
+    ).toUpperCase() !==
+    "ELIGIBLE"
+  ) {
+    return {
+      status:
+        "JOB_NOT_ELIGIBLE",
+      job_id:
+        job.$id,
+      eligibility_status:
+        String(
+          eligibility ??
+          "UNKNOWN"
+        )
+    };
+  }
+
+  const matchStatus =
+    normalize(
+      job.match_status ??
+      job.matchStatus
+    ).toUpperCase();
+
+  const matchScore =
+    Number(
+      job.match_score ??
+      job.matchScore ??
+      0
+    );
+
+  if (
+    matchStatus !== "HIGH_MATCH" &&
+    matchScore < 80
+  ) {
+    return {
+      status:
+        "JOB_NOT_HIGH_MATCH",
+      job_id:
+        job.$id,
+      match_status:
+        matchStatus || "UNKNOWN",
+      match_score:
+        Number.isFinite(matchScore)
+          ? matchScore
+          : 0
     };
   }
 
