@@ -439,7 +439,7 @@ function renderAll(){
 function jobCard(j){
   const cvAction = j.customized_cv_ready
     ? '<span class="tag green">CV ready</span>'
-    : '<button class="btn" data-action="prepare-cv" data-job-id="'+esc(j.id)+'">Prepare CV</button>';
+    : '<button class="btn primary" data-action="prepare-cv" data-job-id="'+esc(j.id)+'">Select & prepare CV</button>';
 
   return '<div class="item"><div class="item-main"><div class="item-grow">'+
     '<div class="item-title">'+esc(j.title)+'</div>'+
@@ -447,8 +447,8 @@ function jobCard(j){
     '<div class="item-meta">'+scoreTag(j.match_score)+' '+oppTag(j.opportunity_status)+' '+tag(j.work_mode||"","teal")+'</div>'+
     '<div class="item-actions">'+
       cvAction+
-      ' <button class="btn primary" data-action="approve-job" data-job-id="'+esc(j.id)+'">Approve & open application</button>'+
-      (j.url ? '<a class="btn" href="'+esc(j.url)+'" target="_blank" rel="noopener">Open job</a>' : '')+
+      (j.customized_cv_ready ? ' <button class="btn primary" data-action="approve-job" data-job-id="'+esc(j.id)+'">Approve & open application</button>' : '')+
+      (j.url ? ' <a class="btn" href="'+esc(j.url)+'" target="_blank" rel="noopener">Open job</a>' : '')+
     '</div>'+
     '</div><div class="score"><div class="score-num">'+Math.round(Number(j.opportunity_score)||0)+'</div><div class="score-label">opp.</div></div></div></div>';
 }
@@ -545,7 +545,7 @@ async function prepareCv(jobId){
   if(!jobId)return;
   try{
     const result=await apiPost(cfg.resume,{jobId});
-    alert("Resume Agent: "+(result.status||"DONE")+(result.company? "\n"+result.company+" — "+result.job_title:""));
+    alert("CV preparation: "+(result.status||"DONE")+(result.company? "\n"+result.company+" — "+result.job_title:""));
     await refreshDashboard();
   }catch(e){alert(e.message)}
 }
