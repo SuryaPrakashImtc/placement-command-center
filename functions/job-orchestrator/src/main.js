@@ -62,70 +62,130 @@ export default async ({ req, res, log, error }) => {
     let remotiveFound = 0;
     let remotiveSaved = 0;
     let remotiveSkipped = 0;
+    let remotiveStatus = 'SUCCESS';
 
     for (const category of remotiveCategories) {
-      const response = await fetch(
-        `https://remotive.com/api/remote-jobs?category=${category}&limit=10`
-      );
-
-      if (!response.ok) {
-        throw new Error(
-          `Remotive API returned ${response.status} for ${category}`
+      try {
+        const response = await fetch(
+          \`https://remotive.com/api/remote-jobs?category=\${category}&limit=10\`
         );
-      }
 
-      const data = await response.json();
-
-      remotiveFound += data.jobs.length;
-
-      for (const job of data.jobs) {
-        const sourceJobId = String(job.id);
-
-        if (await jobExists(sourceJobId)) {
-          remotiveSkipped++;
-          continue;
+        if (!response.ok) {
+          throw new Error(
+            \`Remotive API returned \${response.status} for \${category}\`
+          );
         }
 
-        const now = new Date().toISOString();
+        const data = await response.json();
+        const sourceJobs =
+          Array.isArray(data?.jobs)
+            ? data.jobs
+            : [];
 
-        await tablesDB.createRow({
-          databaseId: '6aa03d1800119759c9bb',
-          tableId: 'jobs',
-          rowId: ID.unique(),
-          data: {
-            source: 'Remotive',
-            job_title: job.title,
-            company_name: job.company_name,
-            job_url: job.url,
-            location: job.candidate_required_location || 'Remote',
-            job_description: job.description || '',
-            job_type: job.job_type || 'Unknown',
-            experience_required: 'Unknown',
-            education_required: 'Unknown',
-            salary_range: job.salary || 'Not disclosed',
-            work_mode: 'Remote',
-            industry: 'Unknown',
-            department: category,
-            function: category,
-            company_size: 'Unknown',
-            company_type: 'Unknown',
-            job_posted_date: job.publication_date || null,
-            application_deadline: null,
-            job_status: 'OPEN',
-            eligibility_status: 'UNKNOWN',
-            match_status: 'UNKNOWN',
-            application_status: 'NOT_APPLIED',
-            discovery_date: now,
-            job_id: `REMOTIVE_${sourceJobId}`,
-            source_job_id: sourceJobId,
-            company_id: null,
-            source_platform: 'Remotive',
-            first_seen_date: now,
-            last_updated_date: now
+        remotiveFound +=
+          sourceJobs.length;
+
+        for (const job of sourceJobs) {
+          const sourceJobId =
+            \`REMOTIVE_\${String(job.id)}\`;
+
+          if (jobExists(sourceJobId)) {
+            remotiveSkipped++;
+            continue;
           }
-        });
 
-        remotiveSaved++;
+          const now =
+            new Date().toISOString();
+
+          await tablesDB.createRow({
+            databaseId:
+              '6aa03d1800119759c9bb',
+            tableId:
+              'jobs',
+            rowId:
+              ID.unique(),
+            data: {
+              source: 'Remotive',
+              job_title:
+                job.title ||
+                'Unknown',
+              company_name:
+                job.company_name ||
+                'Unknown',
+              job_url:
+                job.url ||
+                '',
+              location:
+                job.candidate_required_location ||
+                'Remote',
+              job_description:
+                job.description ||
+                '',
+              job_type:
+                job.job_type ||
+                'Unknown',
+              experience_required:
+                'Unknown',
+              education_required:
+                'Unknown',
+              salary_range:
+                job.salary ||
+                'Not disclosed',
+              work_mode:
+                'Remote',
+              industry:
+                'Unknown',
+              department:
+                category,
+              function:
+                category,
+              company_size:
+                'Unknown',
+              company_type:
+                'Unknown',
+              job_posted_date:
+                job.publication_date ||
+                null,
+              application_deadline:
+                null,
+              job_status:
+                'OPEN',
+              eligibility_status:
+                'UNKNOWN',
+              match_status:
+                'UNKNOWN',
+              application_status:
+                'NOT_APPLIED',
+              discovery_date:
+                now,
+              job_id:
+                sourceJobId,
+              source_job_id:
+                sourceJobId,
+              company_id:
+                null,
+              source_platform:
+                'Remotive',
+              first_seen_date:
+                now,
+              last_updated_date:
+                now
+            }
+          });
+
+          existingSourceJobIds.add(
+            sourceJobId
+          );
+
+          remotiveSaved++;
+        }
+      } catch (remotiveError) {
+        remotiveStatus =
+          'PARTIAL_SUCCESS';
+
+        error(
+          \`Remotive \${category}: \${remotiveError.message}\`
+        );
       }
     }
 
@@ -137,160 +197,295 @@ export default async ({ req, res, log, error }) => {
       'marketing',
       'sales',
       'business development',
-      'data analyst'
+      'market research'
     ];
 
     let himalayasFound = 0;
     let himalayasUnique = 0;
     let himalayasSaved = 0;
     let himalayasSkipped = 0;
+    let himalayasStatus = 'SUCCESS';
 
-    const seenHimalayasJobs = new Set();
+    const seenHimalayasJobs =
+      new Set();
 
     for (const searchTerm of himalayasQueries) {
-      const url = new URL(
-        'https://himalayas.app/jobs/api/search'
-      );
-
-      url.searchParams.set('q', searchTerm);
-      url.searchParams.set('country', 'India');
-      url.searchParams.set('sort', 'recent');
-      url.searchParams.set('page', '1');
-
-      const response = await fetch(url);
-
-      if (!response.ok) {
-        throw new Error(
-          `Himalayas API returned ${response.status} for ${searchTerm}`
+      try {
+        const url = new URL(
+          'https://himalayas.app/jobs/api/search'
         );
-      }
 
-      const data = await response.json();
+        url.searchParams.set(
+          'q',
+          searchTerm
+        );
+        url.searchParams.set(
+          'country',
+          'India'
+        );
+        url.searchParams.set(
+          'sort',
+          'recent'
+        );
+        url.searchParams.set(
+          'page',
+          '1'
+        );
 
-      himalayasFound += Array.isArray(data.jobs)
-        ? data.jobs.length
-        : 0;
+        const response =
+          await fetch(url);
 
-      for (const job of data.jobs || []) {
-        const guid = String(job.guid);
-
-        if (seenHimalayasJobs.has(guid)) {
-          continue;
+        if (!response.ok) {
+          throw new Error(
+            \`Himalayas API returned \${response.status} for \${searchTerm}\`
+          );
         }
 
-        seenHimalayasJobs.add(guid);
-        himalayasUnique++;
+        const data =
+          await response.json();
 
-        const sourceJobId = `HIMALAYAS_${guid}`;
+        const sourceJobs =
+          Array.isArray(
+            data?.jobs
+          )
+            ? data.jobs
+            : [];
 
-        if (await jobExists(sourceJobId)) {
-          himalayasSkipped++;
-          continue;
-        }
+        himalayasFound +=
+          sourceJobs.length;
 
-        const now = new Date().toISOString();
+        for (const job of sourceJobs) {
+          const guid =
+            String(
+              job.guid ||
+              job.id ||
+              job.slug ||
+              ''
+            );
 
-        let location = 'Worldwide';
-
-        if (
-          Array.isArray(job.locationRestrictions) &&
-          job.locationRestrictions.length > 0
-        ) {
-          location = job.locationRestrictions
-            .map(location => location.name || location.alpha2 || location)
-            .filter(Boolean)
-            .join(', ');
-        }
-
-        let salary = 'Not disclosed';
-
-        if (
-          job.minSalary !== null &&
-          job.minSalary !== undefined
-        ) {
-          const min = Number(job.minSalary).toLocaleString();
-          const max =
-            job.maxSalary !== null &&
-            job.maxSalary !== undefined
-              ? Number(job.maxSalary).toLocaleString()
-              : null;
-
-          salary =
-            `${job.currency || ''} ${min}` +
-            (max ? ` - ${max}` : '') +
-            ` ${job.salaryPeriod || 'annual'}`;
-        }
-
-        const postedDate =
-          job.pubDate
-            ? new Date(Number(job.pubDate)).toISOString()
-            : null;
-
-        const experience =
-          Array.isArray(job.seniority) &&
-          job.seniority.length > 0
-            ? job.seniority.join(', ')
-            : 'Unknown';
-
-        const categories =
-          Array.isArray(job.categories) &&
-          job.categories.length > 0
-            ? job.categories.join(', ')
-            : 'Unknown';
-
-        const parentCategories =
-          Array.isArray(job.parentCategories) &&
-          job.parentCategories.length > 0
-            ? job.parentCategories.join(', ')
-            : 'Unknown';
-
-        await tablesDB.createRow({
-          databaseId: '6aa03d1800119759c9bb',
-          tableId: 'jobs',
-          rowId: ID.unique(),
-          data: {
-            source: 'Himalayas',
-            job_title: job.title || 'Unknown',
-            company_name: job.companyName || 'Unknown',
-            job_url: job.applicationLink || '',
-            location,
-            job_description:
-              job.description ||
-              job.excerpt ||
-              '',
-            job_type: job.employmentType || 'Unknown',
-            experience_required: experience,
-            education_required: 'Unknown',
-            salary_range: salary,
-            work_mode: 'Remote',
-            industry: parentCategories,
-            department: categories,
-            function: searchTerm,
-            company_size: 'Unknown',
-            company_type: 'Unknown',
-            job_posted_date: postedDate,
-            application_deadline: null,
-            job_status: 'OPEN',
-            eligibility_status: 'UNKNOWN',
-            match_status: 'UNKNOWN',
-            application_status: 'NOT_APPLIED',
-            discovery_date: now,
-            job_id: sourceJobId,
-            source_job_id: sourceJobId,
-            company_id: null,
-            source_platform: 'Himalayas',
-            first_seen_date: now,
-            last_updated_date: now
+          if (!guid) {
+            continue;
           }
-        });
 
-        himalayasSaved++;
+          if (
+            seenHimalayasJobs.has(
+              guid
+            )
+          ) {
+            continue;
+          }
+
+          seenHimalayasJobs.add(
+            guid
+          );
+          himalayasUnique++;
+
+          const sourceJobId =
+            \`HIMALAYAS_\${guid}\`;
+
+          if (
+            jobExists(
+              sourceJobId
+            )
+          ) {
+            himalayasSkipped++;
+            continue;
+          }
+
+          const now =
+            new Date().toISOString();
+
+          let location =
+            'Worldwide';
+
+          if (
+            Array.isArray(
+              job.locationRestrictions
+            ) &&
+            job.locationRestrictions.length
+          ) {
+            location =
+              job.locationRestrictions
+                .map(
+                  item =>
+                    item?.name ||
+                    item?.alpha2 ||
+                    item
+                )
+                .filter(Boolean)
+                .join(', ');
+          }
+
+          let salary =
+            'Not disclosed';
+
+          if (
+            job.minSalary !==
+              null &&
+            job.minSalary !==
+              undefined
+          ) {
+            const min =
+              Number(
+                job.minSalary
+              ).toLocaleString();
+
+            const max =
+              job.maxSalary !==
+                null &&
+              job.maxSalary !==
+                undefined
+                ? Number(
+                    job.maxSalary
+                  ).toLocaleString()
+                : null;
+
+            salary =
+              \`\${job.currency || ''} \${min}\` +
+              (
+                max
+                  ? \` - \${max}\`
+                  : ''
+              ) +
+              \` \${job.salaryPeriod || 'annual'}\`;
+          }
+
+          let postedDate = null;
+
+          if (job.pubDate) {
+            const parsedDate =
+              Number(
+                job.pubDate
+              );
+
+            if (
+              Number.isFinite(
+                parsedDate
+              )
+            ) {
+              postedDate =
+                new Date(
+                  parsedDate
+                ).toISOString();
+            }
+          }
+
+          const experience =
+            Array.isArray(
+              job.seniority
+            ) &&
+            job.seniority.length
+              ? job.seniority.join(', ')
+              : 'Unknown';
+
+          const categories =
+            Array.isArray(
+              job.categories
+            ) &&
+            job.categories.length
+              ? job.categories.join(', ')
+              : 'Unknown';
+
+          const parentCategories =
+            Array.isArray(
+              job.parentCategories
+            ) &&
+            job.parentCategories.length
+              ? job.parentCategories.join(', ')
+              : 'Unknown';
+
+          await tablesDB.createRow({
+            databaseId:
+              '6aa03d1800119759c9bb',
+            tableId:
+              'jobs',
+            rowId:
+              ID.unique(),
+            data: {
+              source:
+                'Himalayas',
+              job_title:
+                job.title ||
+                'Unknown',
+              company_name:
+                job.companyName ||
+                job.company ||
+                'Unknown',
+              job_url:
+                job.applicationLink ||
+                job.url ||
+                '',
+              location,
+              job_description:
+                job.description ||
+                job.excerpt ||
+                '',
+              job_type:
+                job.employmentType ||
+                'Unknown',
+              experience_required:
+                experience,
+              education_required:
+                'Unknown',
+              salary_range:
+                salary,
+              work_mode:
+                'Remote',
+              industry:
+                parentCategories,
+              department:
+                categories,
+              function:
+                searchTerm,
+              company_size:
+                'Unknown',
+              company_type:
+                'Unknown',
+              job_posted_date:
+                postedDate,
+              application_deadline:
+                null,
+              job_status:
+                'OPEN',
+              eligibility_status:
+                'UNKNOWN',
+              match_status:
+                'UNKNOWN',
+              application_status:
+                'NOT_APPLIED',
+              discovery_date:
+                now,
+              job_id:
+                sourceJobId,
+              source_job_id:
+                sourceJobId,
+              company_id:
+                null,
+              source_platform:
+                'Himalayas',
+              first_seen_date:
+                now,
+              last_updated_date:
+                now
+            }
+          });
+
+          existingSourceJobIds.add(
+            sourceJobId
+          );
+
+          himalayasSaved++;
+        }
+      } catch (himalayasError) {
+        himalayasStatus =
+          'PARTIAL_SUCCESS';
+
+        error(
+          \`Himalayas \${searchTerm}: \${himalayasError.message}\`
+        );
       }
     }
 
-    // =======================================================
-       // =======================================================
-        // =======================================================
     // 3. JOBICY
     // =======================================================
 
@@ -1611,6 +1806,7 @@ export default async ({ req, res, log, error }) => {
       status: 'SUCCESS',
 
       remotive: {
+        status: remotiveStatus,
         categories: remotiveCategories,
         jobsFound: remotiveFound,
         jobsSaved: remotiveSaved,
@@ -1618,6 +1814,7 @@ export default async ({ req, res, log, error }) => {
       },
 
       himalayas: {
+        status: himalayasStatus,
         searchTerms: himalayasQueries,
         jobsFound: himalayasFound,
         uniqueJobs: himalayasUnique,
