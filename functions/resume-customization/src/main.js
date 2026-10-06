@@ -37,6 +37,9 @@ const PENDING_CV_PREFIX =
 const FINAL_CV_PREFIX =
   "CUSTOMIZED-";
 
+const REJECTED_CV_PREFIX =
+  "REJECTED-CUSTOMIZED-";
+
 const SAFE_PAGE_RATIO = 0.95;
 
 const MAX_CUSTOMIZATIONS_PER_24H =
@@ -2300,7 +2303,7 @@ async function finalizeRenderResult(
     !Number.isInteger(
       pages
     ) ||
-    pages < 1
+    pages < 0
   ) {
     throw new Error(
       "RENDER_RESULT_INVALID_PAGE_COUNT"
@@ -2384,6 +2387,40 @@ async function finalizeRenderResult(
     throw new Error(
       "RENDER_RESULT_FILE_NOT_PENDING"
     );
+  }
+
+  if (
+    pages ===
+    0
+  ) {
+    const rejectedName =
+      fitStorageFilename(
+        REJECTED_CV_PREFIX +
+        normalize(file.name).slice(
+          PENDING_CV_PREFIX.length
+        )
+      );
+
+    const renamed =
+      await storage.updateFile({
+        bucketId:
+          RESUME_BUCKET_ID,
+        fileId,
+        name:
+          rejectedName
+      });
+
+    return {
+      status:
+        "RENDER_REJECTED",
+      pages,
+      file: {
+        id:
+          renamed.$id,
+        name:
+          renamed.name
+      }
+    };
   }
 
   if (
