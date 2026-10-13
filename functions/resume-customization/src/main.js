@@ -476,6 +476,23 @@ async function findMasterCvFile() {
   if (fallback) {
     return fallback;
   }
+
+  // Accept GitHub/Windows duplicate suffixes such as "(5)".
+  const flexibleMasterMatch =
+    files.find(
+      (file) => {
+        const filename = normalize(file.name).toLowerCase();
+        return (
+          filename.startsWith("master cv fp") &&
+          filename.endsWith(".docx")
+        );
+      }
+    );
+
+  if (flexibleMasterMatch) {
+    return flexibleMasterMatch;
+  }
+
   const availableFiles =
     files
       .map(
@@ -1648,13 +1665,13 @@ async function getJobs() {
     createTablesClient();
 
   const result =
-    await tables.listRows(
-      DATABASE_ID,
-      JOBS_TABLE_ID,
-      [
+    await tables.listRows({
+      databaseId: DATABASE_ID,
+      tableId: JOBS_TABLE_ID,
+      queries: [
         Query.limit(100)
       ]
-    );
+    });
 
   return (
     result.rows || []
@@ -2584,13 +2601,11 @@ async function customizeResume(req) {
     createTablesClient();
 
   job =
-    await tables.getRow(
-      DATABASE_ID,
-      JOBS_TABLE_ID,
-      String(
-        requestBody.jobId
-      )
-    );
+    await tables.getRow({
+      databaseId: DATABASE_ID,
+      tableId: JOBS_TABLE_ID,
+      rowId: String(requestBody.jobId)
+    });
 
   const eligibility =
     job.eligibility_status ??
