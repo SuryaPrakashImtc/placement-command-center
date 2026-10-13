@@ -5,7 +5,7 @@ export default async ({ req, res, log, error }) => {
     const client = new Client()
       .setEndpoint(process.env.APPWRITE_FUNCTION_API_ENDPOINT)
       .setProject(process.env.APPWRITE_FUNCTION_PROJECT_ID)
-      .setKey(process.env.APPWRITE_API_KEY);
+      .setKey(process.env.JOB_AUTOMATION_API_KEY);
 
     const tablesDB = new TablesDB(client);
 
@@ -1801,6 +1801,8 @@ export default async ({ req, res, log, error }) => {
 
     // RESULT
     // =======================================================
+
+    log(`Job discovery completed. Remotive saved=${remotiveSaved}; Himalayas saved=${himalayasSaved}; Jobicy saved=${jobicySaved}; web-search saved=${webSearchSaved}; Remote OK saved=${remoteOkSaved}; We Work Remotely saved=${wwrSaved}; Remote Landers saved=${remoteLandersSaved}.`);
 
     return res.json({
       status: 'SUCCESS',
