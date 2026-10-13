@@ -606,6 +606,18 @@ export default async ({ req, res, log, error }) => {
     // RESULT
     // ---------------------------------------------------
 
+    log(JSON.stringify({
+      event: 'job-match-run-complete',
+      jobsFoundForEvaluation: jobs.length,
+      evaluated,
+      highMatch,
+      mediumMatch,
+      lowMatch,
+      notAMatch,
+      skippedNotEligible: skipped,
+      failed
+    }));
+
     return res.json({
 
       status: 'SUCCESS',
