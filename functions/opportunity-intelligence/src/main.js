@@ -3002,6 +3002,24 @@ export default async ({
     // FINAL RESULT
     // ===================================================
 
+    log(JSON.stringify({
+      event: 'opportunity-intelligence-run-complete',
+      existingJobsFound: allJobs.length,
+      existingEvaluated,
+      existingPriority,
+      existingWatch,
+      existingBacklog,
+      existingSkipped,
+      existingFailed,
+      discoveredCompanies: discoveredCompanies.size,
+      signalsFound,
+      peopleSearches,
+      peopleFound,
+      proactiveCreated,
+      proactiveUpdated,
+      proactiveErrors
+    }));
+
     return res.json({
 
       status:
