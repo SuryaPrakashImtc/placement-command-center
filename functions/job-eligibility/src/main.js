@@ -543,6 +543,16 @@ export default async ({ req, res, log, error }) => {
       }
     }
 
+    log(JSON.stringify({
+      event: 'eligibility-run-complete',
+      jobsFoundForEvaluation: allJobs.length,
+      evaluated,
+      eligible,
+      notEligible,
+      unknown,
+      failed
+    }));
+
     return res.json({
       status: 'SUCCESS',
       jobsFoundForEvaluation: allJobs.length,
